@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 using std::cout;
 using std::cin;
+using std::endl;
 using std::string;
 
 static void call(const string &input) {
@@ -18,7 +19,17 @@ static void call(const string &input) {
         exit(-1);
     }
     else if (rc == 0) {
-        execvp(input.c_str(), nullptr);
+        printf("child process(pid:%d)\n", rc);
+        std::stringstream ss(input);
+        string line;
+        std::vector<char *> tokens;
+        while (ss >> line) {
+            char *token = strdup(line.c_str());
+            cout << token << endl;
+            tokens.push_back(token);
+        }
+        tokens.push_back(nullptr);
+        execvp(tokens[0], tokens.data());
         perror("execvp error");
     }
     else {
@@ -37,7 +48,7 @@ int main() {
     while (true) {
         cout << "minishell$";
         string input;
-        cin >> input;
+        getline(cin, input);
         if (input == "q") {
             break;
         }
