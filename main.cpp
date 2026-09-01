@@ -45,8 +45,9 @@ static void call(const string &input) {
 }
 
 int main() {
+    const string prompt = "input.txt";
     while (true) {
-        cout << "minishell$";
+        cout << prompt;
         string input;
         getline(cin, input);
         if (input == "q") {
