@@ -13,46 +13,38 @@ using std::cin;
 using std::endl;
 using std::string;
 
-static void call(const string &input) {
+static void call(const string &input)
+{
     if (const int rc = fork(); rc < 0) {
         perror("fork error");
         exit(-1);
     }
     else if (rc == 0) {
-        printf("child process(pid:%d)\n", rc);
         std::stringstream ss(input);
         string line;
         std::vector<char *> tokens;
         while (ss >> line) {
             char *token = strdup(line.c_str());
-            cout << token << endl;
             tokens.push_back(token);
         }
         tokens.push_back(nullptr);
         execvp(tokens[0], tokens.data());
         perror("execvp error");
+        exit(-1);
     }
-    else {
-        printf("parent process(pid:%d)\n", rc);
-        if (const int wc = wait(nullptr); wc < 0) {
-            perror("wait error");
-            exit(-1);
-        }
-        else {
-            printf("child finished(wc:%d)\n", wc);
-        }
+    if (const int wc = wait(nullptr); wc < 0) {
+        perror("wait error");
+        exit(-1);
     }
 }
 
-int main() {
-    const string prompt = "input.txt";
+int main(int argc, char *argv[])
+{
     while (true) {
-        cout << prompt;
+        cout << "wsl:" << argv[0] << "> ";
         string input;
         getline(cin, input);
-        if (input == "q") {
-            break;
-        }
+        if (input == "exit") { break; }
         call(input);
     }
     return 0;
