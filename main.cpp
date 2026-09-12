@@ -14,15 +14,28 @@ using std::cout;
 using std::cin;
 using std::string;
 using std::vector;
-using TOKEN_t = string;
-using TOKENS_T = vector<TOKEN_t>;
+using TOKEN_T = string;
+using TOKENS_T = vector<TOKEN_T>;
 using INPUT_T = string;
+using FILENAMES_T = string;
 
 namespace
 {
+    struct Redirection
+    {
+        enum Type_t
+        {
+            Input, Output, Append
+        };
+
+        Type_t type;
+        FILENAMES_T filename;
+    };
+
     struct Command
     {
         TOKENS_T argv{};
+        vector<Redirection> redirections{};
     };
 
     class miniShell
@@ -89,7 +102,7 @@ TOKENS_T miniShell::tokenize(const INPUT_T &line)
 {
     TOKENS_T tokens{};
     std::stringstream ss(line);
-    TOKEN_t token;
+    TOKEN_T token;
     while (ss >> token) {
         tokens.push_back(token);
     }
