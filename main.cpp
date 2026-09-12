@@ -33,9 +33,9 @@ namespace
 
         void setCommand();
 
-        void executeCommands() const;
+        void executeCommands();
 
-        void executeCommand(const COMMAND_T &command) const;
+        void executeCommand(const COMMAND_T &command);
 
         void setPrompt(string prompt = "$miniShell>");
 
@@ -98,18 +98,20 @@ void miniShell::setCommand()
     m_commands.push_back(command);
 }
 
-void miniShell::executeCommands() const
+void miniShell::executeCommands()
 {
     for (auto &command: m_commands) {
-        if (m_exit) { return; }
         executeCommand(command);
+        if (m_exit) { return; }
     }
 }
 
-void miniShell::executeCommand(const COMMAND_T &command) const
+void miniShell::executeCommand(const COMMAND_T &command)
 {
-    if (m_redirect) {}
-    if (m_pipe) {}
+    if (string{command[0]} == "exit") {
+        m_exit = true;
+        return;
+    }
     int rc = fork();
     if (rc < 0) { occurError("fork error"); }
     if (rc == 0) {
@@ -127,11 +129,7 @@ void miniShell::setPrompt(string prompt) { m_prompt = std::move(prompt); }
 
 void miniShell::printPrompt() const { cout << m_path << m_prompt << ' '; }
 
-void miniShell::occurError(const char *message)
-{
-    perror(message);
-    exit(-1);
-}
+void miniShell::occurError(const char *message) { perror(message); }
 
 int main(int argc, char *argv[])
 {
