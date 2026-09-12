@@ -9,19 +9,29 @@
 #include <sys/wait.h>
 #include <cstring>
 #include <fcntl.h>
+
 using std::cout;
 using std::cin;
 using std::string;
 using std::vector;
-using COMMAND_T = vector<char *>;
+using TOKEN_t = string;
+using TOKENS_T = vector<TOKEN_t>;
+using INPUT_T = string;
 
 namespace
 {
+    struct Command
+    {
+        TOKENS_T argv{};
+    };
+
     class miniShell
     {
     public:
-        static miniShell &init(int argc, char *argv[]);
+        //初始化一个单例shell
+        static miniShell &init(string path);
 
+        //循环运行
         void run();
 
         miniShell(const miniShell &) = delete;
@@ -29,41 +39,38 @@ namespace
         miniShell &operator=(const miniShell &) = delete;
 
     private:
-        void runCommands();
+        //将输入拆成一个一个的独立单元，方便解析
+        static TOKENS_T tokenize(const INPUT_T &line);
 
-        void executeCommand();
+        //解析输入单元，填充命令
+        void parser(const TOKENS_T &tokens);
 
-        [[nodiscard]] bool checkCommand() const;
+        //执行命令
+        void executeCommands();
 
-        void shellCommand();
+        //检查是否为内置shell命令
+        static int runCommand(const Command &command);
 
-        void execCommand() const;
+        //内建shell命令
+        static int shellCommand(const Command &command);
 
-        void endCommand();
-
-        void setPrompt(string prompt = "$miniShell> ");
-
-        void setPath(string path);
+        //外部程序命令
+        static int execCommand(const Command &command);
 
         miniShell() = default;
 
         ~miniShell() = default;
 
-        string m_path{"/"};
-        string m_prompt{};
-        string m_input{};
-        COMMAND_T m_command{};
-        vector<string> m_redirect{};
-        bool m_pipe{false};
-        bool m_exit{false};
+        string m_prompt{"$miniShell> "};
+        string m_path{};
+        vector<Command> m_commands{};
     };
 }
 
-miniShell &miniShell::init(int argc, char *argv[])
+miniShell &miniShell::init(string path)
 {
     static miniShell shell{};
-    shell.setPrompt();
-    shell.setPath(argv[0]);
+    shell.m_path = std::move(path);
     return shell;
 }
 
@@ -71,108 +78,91 @@ void miniShell::run()
 {
     while (true) {
         cout << m_path << m_prompt;
-        getline(cin, m_input);
-        runCommands();
-        if (m_exit) {
-            break;
-        }
+        INPUT_T line;
+        getline(cin, line);
+        parser(tokenize(line));
+        executeCommands();
     }
 }
 
-void miniShell::runCommands()
+TOKENS_T miniShell::tokenize(const INPUT_T &line)
 {
-    std::stringstream ss(m_input);
-    while (true) {
-        string token;
-        if (!m_exit && ss >> token) {
-            if (token == "&&") {
-                endCommand();
-            }
-            else if (token == "<" || token == ">") {
-                if (string file{}; ss >> file) {
-                    m_redirect.push_back(token);
-                    m_redirect.push_back(file);
-                }
-                else {
-                    perror("shell: syntax error near unexpected token `newline'");
-                    break;
-                }
-            }
-            else { m_command.push_back(strdup(token.c_str())); }
-        }
-        else {
-            endCommand();
-            break;
-        }
+    TOKENS_T tokens{};
+    std::stringstream ss(line);
+    TOKEN_t token;
+    while (ss >> token) {
+        tokens.push_back(token);
     }
-    m_command.clear();
-    m_redirect.clear();
+    return tokens;
 }
 
-void miniShell::shellCommand()
+void miniShell::parser(const TOKENS_T &tokens)
 {
-    m_exit = true;
+    Command command{};
+    command.argv = tokens;
+    m_commands.push_back(std::move(command));
 }
 
-void miniShell::execCommand() const
+void miniShell::executeCommands()
 {
-    if (m_pipe) {}
-    int rc = fork();
+    if (m_commands.empty()) {
+        return;
+    }
+    for (auto &it: m_commands) {
+        runCommand(it);
+    }
+    m_commands.clear();
+}
+
+int miniShell::runCommand(const Command &command)
+{
+    if (command.argv[0] == "exit") {
+        return shellCommand(command);
+    }
+    else {
+        return execCommand(command);
+    }
+}
+
+int miniShell::shellCommand(const Command &command)
+{
+    return 0;
+}
+
+int miniShell::execCommand(const Command &command)
+{
+    const pid_t rc = fork();
     if (rc < 0) {
         perror("fork error");
-        return;
+        return -1;
     }
     if (rc == 0) {
-        if (!m_redirect.empty()) {
-            for (auto it = m_redirect.begin(); it != m_redirect.end(); ++it) {
-                if (*it == "<") {
-                    ++it;
-                    int fd = open(it->c_str(), O_RDONLY | O_CREAT);
-                    dup2(fd, STDIN_FILENO);
-                }
-                else {
-                    ++it;
-                    int fd = open(it->c_str(), O_WRONLY | O_CREAT);
-                    dup2(fd, STDOUT_FILENO);
-                }
-            }
+        vector<char *> argv{};
+        argv.reserve(command.argv.size());
+        for (auto &it: command.argv) {
+            argv.push_back(strdup(it.c_str()));
         }
-        execvp(m_command[0], m_command.data());
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
         perror("execvp error");
+        for (const auto &it: argv) {
+            free(it);
+        }
+        exit(-1);
     }
     else {
-        if (const int wc = wait(&rc); wc < 0) { perror("wait error"); }
+        int *status{};
+        if (const pid_t wc = waitpid(rc, status, 0); wc < 0) {
+            perror("wait error");
+            return *status;
+        }
     }
+    return 0;
 }
-
-void miniShell::executeCommand()
-{
-    if (m_command[0] == nullptr) {
-        return;
-    }
-    if (checkCommand()) {
-        shellCommand();
-    }
-    else {
-        execCommand();
-    }
-}
-
-void miniShell::endCommand()
-{
-    m_command.push_back(nullptr);
-    executeCommand();
-}
-
-void miniShell::setPath(string path) { m_path = std::move(path); }
-
-void miniShell::setPrompt(string prompt) { m_prompt = std::move(prompt); }
-
-bool miniShell::checkCommand() const { return string{m_command[0]} == "exit"; }
 
 int main(int argc, char *argv[])
 {
-    miniShell &shell = miniShell::init(argc, argv);
+    miniShell &shell = miniShell::init(argv[0]);
     shell.run();
     return 0;
 }
