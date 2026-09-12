@@ -29,8 +29,6 @@ namespace
         miniShell &operator=(const miniShell &) = delete;
 
     private:
-        void getInput();
-
         void runCommands();
 
         void executeCommand();
@@ -43,15 +41,9 @@ namespace
 
         void endCommand();
 
-        void setPrompt(string prompt = "$miniShell>");
+        void setPrompt(string prompt = "$miniShell> ");
 
         void setPath(string path);
-
-        void printPrompt() const;
-
-        void frash();
-
-        static void occurError(const char *message);
 
         miniShell() = default;
 
@@ -78,20 +70,14 @@ miniShell &miniShell::init(int argc, char *argv[])
 void miniShell::run()
 {
     while (true) {
-        getInput();
+        cout << m_path << m_prompt;
+        getline(cin, m_input);
         runCommands();
         if (m_exit) {
             break;
         }
     }
 }
-
-void miniShell::getInput()
-{
-    printPrompt();
-    getline(cin, m_input);
-}
-
 
 void miniShell::runCommands()
 {
@@ -108,7 +94,7 @@ void miniShell::runCommands()
                     m_redirect.push_back(file);
                 }
                 else {
-                    occurError("shell: syntax error near unexpected token `newline'");
+                    perror("shell: syntax error near unexpected token `newline'");
                     break;
                 }
             }
@@ -119,7 +105,8 @@ void miniShell::runCommands()
             break;
         }
     }
-    frash();
+    m_command.clear();
+    m_redirect.clear();
 }
 
 void miniShell::shellCommand()
@@ -132,7 +119,7 @@ void miniShell::execCommand() const
     if (m_pipe) {}
     int rc = fork();
     if (rc < 0) {
-        occurError("fork error");
+        perror("fork error");
         return;
     }
     if (rc == 0) {
@@ -151,10 +138,10 @@ void miniShell::execCommand() const
             }
         }
         execvp(m_command[0], m_command.data());
-        occurError("execvp error");
+        perror("execvp error");
     }
     else {
-        if (const int wc = wait(&rc); wc < 0) { occurError("wait error"); }
+        if (const int wc = wait(&rc); wc < 0) { perror("wait error"); }
     }
 }
 
@@ -181,17 +168,7 @@ void miniShell::setPath(string path) { m_path = std::move(path); }
 
 void miniShell::setPrompt(string prompt) { m_prompt = std::move(prompt); }
 
-void miniShell::printPrompt() const { cout << m_path << m_prompt << ' '; }
-
-void miniShell::occurError(const char *message) { perror(message); }
-
 bool miniShell::checkCommand() const { return string{m_command[0]} == "exit"; }
-
-void miniShell::frash()
-{
-    m_command.clear();
-    m_redirect.clear();
-}
 
 int main(int argc, char *argv[])
 {
