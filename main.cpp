@@ -31,9 +31,19 @@ namespace
     private:
         void getInput();
 
+        void analysisToken(COMMAND_T &command, const string &token);
+
+        void endCommand(COMMAND_T &command);
+
         void setCommand();
 
         void executeCommands();
+
+        static bool checkCommand(const COMMAND_T &command);
+
+        void shellCommand(const COMMAND_T &command);
+
+        void execCommand(const COMMAND_T &command) const;
 
         void executeCommand(const COMMAND_T &command);
 
@@ -85,6 +95,7 @@ void miniShell::getInput()
     getline(cin, m_input);
 }
 
+
 void miniShell::setCommand()
 {
     m_commands.clear();
@@ -92,10 +103,9 @@ void miniShell::setCommand()
     COMMAND_T command;
     string token;
     while (ss >> token) {
-        command.push_back(strdup(token.c_str()));
+        analysisToken(command, token);
     }
-    command.push_back(nullptr);
-    m_commands.push_back(command);
+    endCommand(command);
 }
 
 void miniShell::executeCommands()
@@ -106,12 +116,15 @@ void miniShell::executeCommands()
     }
 }
 
-void miniShell::executeCommand(const COMMAND_T &command)
+
+void miniShell::shellCommand(const COMMAND_T &command)
 {
-    if (string{command[0]} == "exit") {
-        m_exit = true;
-        return;
-    }
+    m_exit = true;
+}
+
+void miniShell::execCommand(const COMMAND_T &command) const
+{
+    if (m_pipe) {}
     int rc = fork();
     if (rc < 0) { occurError("fork error"); }
     if (rc == 0) {
@@ -123,6 +136,20 @@ void miniShell::executeCommand(const COMMAND_T &command)
     }
 }
 
+void miniShell::executeCommand(const COMMAND_T &command)
+{
+    if (command[0] == nullptr) {
+        cout << "command miss" << '\n';
+        return;
+    }
+    if (checkCommand(command)) {
+        shellCommand(command);
+    }
+    else {
+        execCommand(command);
+    }
+}
+
 void miniShell::setPath(string path) { m_path = std::move(path); }
 
 void miniShell::setPrompt(string prompt) { m_prompt = std::move(prompt); }
@@ -130,6 +157,23 @@ void miniShell::setPrompt(string prompt) { m_prompt = std::move(prompt); }
 void miniShell::printPrompt() const { cout << m_path << m_prompt << ' '; }
 
 void miniShell::occurError(const char *message) { perror(message); }
+
+void miniShell::analysisToken(COMMAND_T &command, const string &token)
+{
+    if (token == "&&") {
+        endCommand(command);
+    }
+    else { command.push_back(strdup(token.c_str())); }
+}
+
+void miniShell::endCommand(COMMAND_T &command)
+{
+    command.push_back(nullptr);
+    m_commands.push_back(command);
+    command.clear();
+}
+
+bool miniShell::checkCommand(const COMMAND_T &command) { return string{command[0]} == "exit"; }
 
 int main(int argc, char *argv[])
 {
