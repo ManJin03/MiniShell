@@ -8,7 +8,7 @@
 #include <vector>
 #include <sys/wait.h>
 #include <cstring>
-
+#include <fcntl.h>
 using std::cout;
 using std::cin;
 using std::string;
@@ -48,6 +48,8 @@ namespace
         void setPath(string path);
 
         void printPrompt() const;
+
+        void frash();
 
         static void occurError(const char *message);
 
@@ -96,10 +98,9 @@ void miniShell::runCommands()
     std::stringstream ss(m_input);
     while (true) {
         string token;
-        if (ss >> token) {
+        if (!m_exit && ss >> token) {
             if (token == "&&") {
                 endCommand();
-                executeCommand();
             }
             else if (token == "<" || token == ">") {
                 if (string file{}; ss >> file) {
@@ -115,10 +116,10 @@ void miniShell::runCommands()
         }
         else {
             endCommand();
-            executeCommand();
             break;
         }
     }
+    frash();
 }
 
 void miniShell::shellCommand()
@@ -135,6 +136,20 @@ void miniShell::execCommand() const
         return;
     }
     if (rc == 0) {
+        if (!m_redirect.empty()) {
+            for (auto it = m_redirect.begin(); it != m_redirect.end(); ++it) {
+                if (*it == "<") {
+                    ++it;
+                    int fd = open(it->c_str(), O_RDONLY | O_CREAT);
+                    dup2(fd, STDIN_FILENO);
+                }
+                else {
+                    ++it;
+                    int fd = open(it->c_str(), O_WRONLY | O_CREAT);
+                    dup2(fd, STDOUT_FILENO);
+                }
+            }
+        }
         execvp(m_command[0], m_command.data());
         occurError("execvp error");
     }
@@ -146,7 +161,6 @@ void miniShell::execCommand() const
 void miniShell::executeCommand()
 {
     if (m_command[0] == nullptr) {
-        cout << "command miss" << '\n';
         return;
     }
     if (checkCommand()) {
@@ -155,10 +169,13 @@ void miniShell::executeCommand()
     else {
         execCommand();
     }
-    m_command.clear();
 }
 
-void miniShell::endCommand() { m_command.push_back(nullptr); }
+void miniShell::endCommand()
+{
+    m_command.push_back(nullptr);
+    executeCommand();
+}
 
 void miniShell::setPath(string path) { m_path = std::move(path); }
 
@@ -169,6 +186,12 @@ void miniShell::printPrompt() const { cout << m_path << m_prompt << ' '; }
 void miniShell::occurError(const char *message) { perror(message); }
 
 bool miniShell::checkCommand() const { return string{m_command[0]} == "exit"; }
+
+void miniShell::frash()
+{
+    m_command.clear();
+    m_redirect.clear();
+}
 
 int main(int argc, char *argv[])
 {
