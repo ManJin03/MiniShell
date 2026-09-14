@@ -26,8 +26,8 @@ namespace
     {
         enum class Mode_t
         {
-            input,
-            output,
+            input ,
+            output ,
             append
         };
 
@@ -47,36 +47,36 @@ namespace
     {
     public:
         //初始化一个单例shell
-        static miniShell &init(string path);
+        static miniShell& init(string path);
 
         //循环运行
         void run();
 
-        miniShell(const miniShell &) = delete;
+        miniShell(const miniShell&) = delete;
 
-        miniShell &operator=(const miniShell &) = delete;
+        miniShell& operator=(const miniShell&) = delete;
 
     private:
         //将输入拆成一个一个的独立单元，方便解析
-        static Tokens tokenize(const Input &line);
+        static Tokens tokenize(const Input& line);
 
         //解析输入单元，填充命令
-        void parser(const Tokens &tokens);
+        void parser(const Tokens& tokens);
 
         //执行命令
         void executeCommands();
 
         //检查是否为内置shell命令
-        static int runCommand(const Command &command);
+        static int runCommand(const Command& command);
 
         //内建shell命令
-        static int shellFork(const Command &command);
+        static int shellFork(const Command& command);
 
         //外部程序fork
-        static int execFork(const Command &command);
+        static int execFork(const Command& command);
 
         //外部程序命令
-        static void execCommand(const Command &command);
+        static void execCommand(const Command& command);
 
         miniShell() = default;
 
@@ -88,7 +88,7 @@ namespace
     };
 }
 
-miniShell &miniShell::init(string path)
+miniShell& miniShell::init(string path)
 {
     static miniShell shell{};
     shell.m_path = std::move(path);
@@ -100,13 +100,13 @@ void miniShell::run()
     while (true) {
         cout << m_path << m_prompt;
         Input line;
-        getline(cin, line);
+        getline(cin , line);
         parser(tokenize(line));
         executeCommands();
     }
 }
 
-Tokens miniShell::tokenize(const Input &line)
+Tokens miniShell::tokenize(const Input& line)
 {
     Tokens tokens{};
     std::stringstream ss(line);
@@ -117,11 +117,11 @@ Tokens miniShell::tokenize(const Input &line)
     return tokens;
 }
 
-void miniShell::parser(const Tokens &tokens)
+void miniShell::parser(const Tokens& tokens)
 {
     Command command{};
     auto it = tokens.begin();
-    for (; it != tokens.end(); ++it) {
+    for (; it != tokens.end() ; ++it) {
         if (*it == "<" ||
             *it == ">" ||
             *it == ">>") { break; }
@@ -154,13 +154,13 @@ void miniShell::executeCommands()
     if (m_commands.empty()) {
         return;
     }
-    for (auto &it: m_commands) {
+    for (auto& it : m_commands) {
         runCommand(it);
     }
     m_commands.clear();
 }
 
-int miniShell::runCommand(const Command &command)
+int miniShell::runCommand(const Command& command)
 {
     if (command.argv[0] == "exit") {
         return shellFork(command);
@@ -170,7 +170,7 @@ int miniShell::runCommand(const Command &command)
     }
 }
 
-int miniShell::shellFork(const Command &command)
+int miniShell::shellFork(const Command& command)
 {
     if (command.argv[0] == "exit") {
         exit(0);
@@ -178,37 +178,53 @@ int miniShell::shellFork(const Command &command)
     return 0;
 }
 
-void miniShell::execCommand(const Command &command)
+void miniShell::execCommand(const Command& command)
 {
-    for (const auto &[mode, filename]: command.redirections) {
+    for (const auto& [mode, filename] : command.redirections) {
+        int oflags{};
+        int fd2{};
         if (mode == Redirect::Mode_t::input) {
-            const int fd = open(filename.data(), O_RDONLY);
-            dup2(fd, STDIN_FILENO);
+            oflags = O_RDONLY;
+            fd2 = STDIN_FILENO;
         }
         if (mode == Redirect::Mode_t::output) {
-            const int fd = open(filename.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
-            dup2(fd, STDOUT_FILENO);
+            oflags = O_WRONLY | O_CREAT | O_TRUNC;
+            fd2 = STDOUT_FILENO;
         }
         if (mode == Redirect::Mode_t::append) {
-            const int fd = open(filename.data(),O_WRONLY | O_CREAT | O_APPEND, S_IRWXU);
-            dup2(fd, STDOUT_FILENO);
+            oflags = O_WRONLY | O_CREAT | O_APPEND;
+            fd2 = STDOUT_FILENO;
+        }
+
+        if (const int fd = open(filename.data() , oflags , S_IRWXU) ; fd == -1) {
+            perror("open error");
+            _exit(EXIT_FAILURE);
+        }
+        else {
+            if (dup2(fd , fd2) == -1) {
+                perror("dup2 error");
+                _exit(EXIT_FAILURE);
+            }
+            if (fd != fd2) {
+                close(fd);
+            }
         }
     }
-    vector<char *> argv{};
+    vector<char*> argv{};
     argv.reserve(command.argv.size());
-    for (auto &it: command.argv) {
+    for (auto& it : command.argv) {
         argv.push_back(strdup(it.c_str()));
     }
     argv.push_back(nullptr);
-    execvp(argv[0], argv.data());
+    execvp(argv[0] , argv.data());
     perror("execvp error");
-    for (const auto &it: argv) {
+    for (const auto& it : argv) {
         free(it);
     }
     exit(-1);
 }
 
-int miniShell::execFork(const Command &command)
+int miniShell::execFork(const Command& command)
 {
     const pid_t rc = fork();
     if (rc < 0) {
@@ -220,8 +236,8 @@ int miniShell::execFork(const Command &command)
         return -1;
     }
     else {
-        int *status{};
-        if (const pid_t wc = waitpid(rc, status, 0); wc < 0) {
+        int* status{};
+        if (const pid_t wc = waitpid(rc , status , 0) ; wc < 0) {
             perror("wait error");
             return *status;
         }
@@ -229,9 +245,9 @@ int miniShell::execFork(const Command &command)
     return 0;
 }
 
-int main(int argc, char *argv[])
+int main(int argc , char* argv[])
 {
-    miniShell &shell = miniShell::init(argv[0]);
+    miniShell& shell = miniShell::init(argv[0]);
     shell.run();
     return 0;
 }
