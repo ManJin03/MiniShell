@@ -26,6 +26,7 @@ namespace
     {
         enum class Mode_t
         {
+            non ,
             input ,
             output ,
             append ,
@@ -39,8 +40,17 @@ namespace
 
     struct Command
     {
+        enum class Op
+        {
+            _non ,
+            _and ,
+            _or ,
+            _pipe ,
+        };
+
         Progress argv{};
         Redirections redirections{};
+        Op op{};
     };
 
     using Commands = vector<Command>;
@@ -81,7 +91,7 @@ namespace
         static void execCommand(const Command& command);
 
         //运行重定向指令
-        static void redirectCommand(const Command& command);
+        static void redirectCommand(const Redirections& redirections);
 
         miniShell() = default;
 
@@ -129,7 +139,18 @@ Commands miniShell::parser(const Tokens& tokens)
         Command command{};
         for (; it != tokens.end() ; ++it) {
             if (*it == ";" || *it == "&&" || *it == "||" || *it == "|") {
-                //TODO:op
+                if (*it == ";") {
+                    command.op = Command::Op::_non;
+                }
+                else if (*it == "&&") {
+                    command.op = Command::Op::_and;
+                }
+                else if (*it == "||") {
+                    command.op = Command::Op::_or;
+                }
+                else if (*it == "|") {
+                    command.op = Command::Op::_pipe;
+                }
                 ++it;
                 break;
             }
@@ -139,11 +160,11 @@ Commands miniShell::parser(const Tokens& tokens)
                     redirect.mode = Redirect::Mode_t::input;
                     redirect.filename = *(++it);
                 }
-                if (*it == ">") {
+                else if (*it == ">") {
                     redirect.mode = Redirect::Mode_t::output;
                     redirect.filename = *(++it);
                 }
-                if (*it == ">>") {
+                else if (*it == ">>") {
                     redirect.mode = Redirect::Mode_t::append;
                     redirect.filename = *(++it);
                 }
@@ -160,7 +181,9 @@ Commands miniShell::parser(const Tokens& tokens)
 void miniShell::executeCommands(const Commands& commands)
 {
     for (auto& it : commands) {
-        runCommand(it);
+        if (it.op == Command::Op::_non) {
+            runCommand(it);
+        }
     }
 }
 
@@ -206,7 +229,7 @@ int miniShell::execFork(const Command& command)
 
 void miniShell::execCommand(const Command& command)
 {
-    redirectCommand(command);
+    redirectCommand(command.redirections);
     vector<char*> argv{};
     argv.reserve(command.argv.size());
     for (auto& it : command.argv) {
@@ -221,9 +244,9 @@ void miniShell::execCommand(const Command& command)
     exit(-1);
 }
 
-void miniShell::redirectCommand(const Command& command)
+void miniShell::redirectCommand(const Redirections& redirections)
 {
-    for (const auto& [mode, filename] : command.redirections) {
+    for (const auto& [mode, filename] : redirections) {
         int oflags{};
         int fd2{};
         if (mode == Redirect::Mode_t::input) {
