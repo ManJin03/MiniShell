@@ -43,6 +43,8 @@ namespace
         Redirections redirections{};
     };
 
+    using Commands = vector<Command>;
+
     class miniShell
     {
     public:
@@ -50,7 +52,7 @@ namespace
         static miniShell& init(string path);
 
         //循环运行
-        void run();
+        void run() const;
 
         miniShell(const miniShell&) = delete;
 
@@ -61,10 +63,10 @@ namespace
         static Tokens tokenize(const Input& line);
 
         //解析输入单元，填充命令
-        void parser(const Tokens& tokens);
+        static Commands parser(const Tokens& tokens);
 
         //执行命令
-        void executeCommands();
+        static void executeCommands(const Commands& commands);
 
         //检查是否为内置shell命令
         static int runCommand(const Command& command);
@@ -87,7 +89,6 @@ namespace
 
         string m_prompt{"$miniShell> "};
         string m_path{};
-        vector<Command> m_commands{};
     };
 }
 
@@ -98,14 +99,15 @@ miniShell& miniShell::init(string path)
     return shell;
 }
 
-void miniShell::run()
+void miniShell::run() const
 {
     while (true) {
         cout << m_path << m_prompt;
         Input line;
         getline(cin , line);
-        parser(tokenize(line));
-        executeCommands();
+        Tokens tokens{tokenize(line)};
+        Commands commands{parser(tokens)};
+        executeCommands(commands);
     }
 }
 
@@ -120,53 +122,52 @@ Tokens miniShell::tokenize(const Input& line)
     return tokens;
 }
 
-void miniShell::parser(const Tokens& tokens)
+Commands miniShell::parser(const Tokens& tokens)
 {
-    Command command{};
-    for (auto it = tokens.begin() ; it != tokens.end() ; ++it) {
-        if (*it == "<" || *it == ">" || *it == ">>") {
-            Redirect redirect{};
-            if (*it == "<") {
-                redirect.mode = Redirect::Mode_t::input;
-                redirect.filename = *(++it);
+    Commands commands{};
+    {
+        Command command{};
+        for (auto it = tokens.begin() ; it != tokens.end() ; ++it) {
+            if (*it == "<" || *it == ">" || *it == ">>") {
+                Redirect redirect{};
+                if (*it == "<") {
+                    redirect.mode = Redirect::Mode_t::input;
+                    redirect.filename = *(++it);
+                }
+                if (*it == ">") {
+                    redirect.mode = Redirect::Mode_t::output;
+                    redirect.filename = *(++it);
+                }
+                if (*it == ">>") {
+                    redirect.mode = Redirect::Mode_t::append;
+                    redirect.filename = *(++it);
+                }
+                command.redirections.push_back(std::move(redirect));
+                continue;
             }
-            if (*it == ">") {
-                redirect.mode = Redirect::Mode_t::output;
-                redirect.filename = *(++it);
-            }
-            if (*it == ">>") {
-                redirect.mode = Redirect::Mode_t::append;
-                redirect.filename = *(++it);
-            }
-            command.redirections.push_back(std::move(redirect));
-            continue;
+            command.argv.push_back(*it);
         }
-        command.argv.push_back(*it);
+        commands.push_back(std::move(command));
     }
-    if (!command.argv.empty()) {
-        m_commands.push_back(std::move(command));
-    }
+    return commands;
 }
 
-void miniShell::executeCommands()
+void miniShell::executeCommands(const Commands& commands)
 {
-    if (m_commands.empty()) {
-        return;
-    }
-    for (auto& it : m_commands) {
+    for (auto& it : commands) {
         runCommand(it);
     }
-    m_commands.clear();
 }
 
 int miniShell::runCommand(const Command& command)
 {
+    if (command.argv.empty()) {
+        return 0;
+    }
     if (command.argv[0] == "exit") {
         return shellFork(command);
     }
-    else {
-        return execFork(command);
-    }
+    return execFork(command);
 }
 
 int miniShell::shellFork(const Command& command)
@@ -251,7 +252,7 @@ void miniShell::redirectCommand(const Command& command)
 
 int main(int argc , char* argv[])
 {
-    miniShell& shell = miniShell::init(argv[0]);
+    const miniShell& shell = miniShell::init(argv[0]);
     shell.run();
     return 0;
 }
