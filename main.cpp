@@ -28,7 +28,7 @@ namespace
         {
             input ,
             output ,
-            append
+            append ,
         };
 
         Mode_t mode{};
@@ -120,29 +120,25 @@ Tokens miniShell::tokenize(const Input& line)
 void miniShell::parser(const Tokens& tokens)
 {
     Command command{};
-    auto it = tokens.begin();
-    for (; it != tokens.end() ; ++it) {
-        if (*it == "<" ||
-            *it == ">" ||
-            *it == ">>") { break; }
+    for (auto it = tokens.begin() ; it != tokens.end() ; ++it) {
+        if (*it == "<" || *it == ">" || *it == ">>") {
+            Redirect redirect{};
+            if (*it == "<") {
+                redirect.mode = Redirect::Mode_t::input;
+                redirect.filename = *(++it);
+            }
+            if (*it == ">") {
+                redirect.mode = Redirect::Mode_t::output;
+                redirect.filename = *(++it);
+            }
+            if (*it == ">>") {
+                redirect.mode = Redirect::Mode_t::append;
+                redirect.filename = *(++it);
+            }
+            command.redirections.push_back(std::move(redirect));
+            continue;
+        }
         command.argv.push_back(*it);
-    }
-    while (it != tokens.end()) {
-        Redirect redirect{};
-        if (*it == "<") {
-            redirect.mode = Redirect::Mode_t::input;
-            redirect.filename = *(++it);
-        }
-        if (*it == ">") {
-            redirect.mode = Redirect::Mode_t::output;
-            redirect.filename = *(++it);
-        }
-        if (*it == ">>") {
-            redirect.mode = Redirect::Mode_t::append;
-            redirect.filename = *(++it);
-        }
-        ++it;
-        command.redirections.push_back(std::move(redirect));
     }
     if (!command.argv.empty()) {
         m_commands.push_back(std::move(command));
