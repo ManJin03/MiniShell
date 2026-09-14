@@ -78,6 +78,9 @@ namespace
         //外部程序命令
         static void execCommand(const Command& command);
 
+        //运行重定向指令
+        static void redirectCommand(const Command& command);
+
         miniShell() = default;
 
         ~miniShell() = default;
@@ -174,7 +177,45 @@ int miniShell::shellFork(const Command& command)
     return 0;
 }
 
+int miniShell::execFork(const Command& command)
+{
+    const pid_t rc = fork();
+    if (rc < 0) {
+        perror("fork error");
+        return -1;
+    }
+    if (rc == 0) {
+        execCommand(command);
+        return -1;
+    }
+    else {
+        int* status{};
+        if (const pid_t wc = waitpid(rc , status , 0) ; wc < 0) {
+            perror("wait error");
+            return *status;
+        }
+    }
+    return 0;
+}
+
 void miniShell::execCommand(const Command& command)
+{
+    redirectCommand(command);
+    vector<char*> argv{};
+    argv.reserve(command.argv.size());
+    for (auto& it : command.argv) {
+        argv.push_back(strdup(it.c_str()));
+    }
+    argv.push_back(nullptr);
+    execvp(argv[0] , argv.data());
+    perror("execvp error");
+    for (const auto& it : argv) {
+        free(it);
+    }
+    exit(-1);
+}
+
+void miniShell::redirectCommand(const Command& command)
 {
     for (const auto& [mode, filename] : command.redirections) {
         int oflags{};
@@ -206,39 +247,6 @@ void miniShell::execCommand(const Command& command)
             }
         }
     }
-    vector<char*> argv{};
-    argv.reserve(command.argv.size());
-    for (auto& it : command.argv) {
-        argv.push_back(strdup(it.c_str()));
-    }
-    argv.push_back(nullptr);
-    execvp(argv[0] , argv.data());
-    perror("execvp error");
-    for (const auto& it : argv) {
-        free(it);
-    }
-    exit(-1);
-}
-
-int miniShell::execFork(const Command& command)
-{
-    const pid_t rc = fork();
-    if (rc < 0) {
-        perror("fork error");
-        return -1;
-    }
-    if (rc == 0) {
-        execCommand(command);
-        return -1;
-    }
-    else {
-        int* status{};
-        if (const pid_t wc = waitpid(rc , status , 0) ; wc < 0) {
-            perror("wait error");
-            return *status;
-        }
-    }
-    return 0;
 }
 
 int main(int argc , char* argv[])
