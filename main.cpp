@@ -14,14 +14,15 @@ using std::cout;
 using std::cin;
 using std::string;
 using std::vector;
-using TOKEN_T = string;
-using TOKENS_T = vector<TOKEN_T>;
-using INPUT_T = string;
-using FILENAMES_T = string;
+using Token = string;
+using Tokens = vector<Token>;
+using Progress = vector<Token>;
+using Input = string;
+using Filename = string;
 
 namespace
 {
-    struct Redirection
+    struct Redirect
     {
         enum class Mode_t
         {
@@ -31,13 +32,15 @@ namespace
         };
 
         Mode_t mode{};
-        FILENAMES_T filename{};
+        Filename filename{};
     };
+
+    using Redirections = vector<Redirect>;
 
     struct Command
     {
-        TOKENS_T argv{};
-        vector<Redirection> redirections{};
+        Progress argv{};
+        Redirections redirections{};
     };
 
     class miniShell
@@ -55,10 +58,10 @@ namespace
 
     private:
         //将输入拆成一个一个的独立单元，方便解析
-        static TOKENS_T tokenize(const INPUT_T &line);
+        static Tokens tokenize(const Input &line);
 
         //解析输入单元，填充命令
-        void parser(const TOKENS_T &tokens);
+        void parser(const Tokens &tokens);
 
         //执行命令
         void executeCommands();
@@ -67,10 +70,13 @@ namespace
         static int runCommand(const Command &command);
 
         //内建shell命令
-        static int shellCommand(const Command &command);
+        static int shellFork(const Command &command);
+
+        //外部程序fork
+        static int execFork(const Command &command);
 
         //外部程序命令
-        static int execCommand(const Command &command);
+        static void execCommand(const Command &command);
 
         miniShell() = default;
 
@@ -93,25 +99,25 @@ void miniShell::run()
 {
     while (true) {
         cout << m_path << m_prompt;
-        INPUT_T line;
+        Input line;
         getline(cin, line);
         parser(tokenize(line));
         executeCommands();
     }
 }
 
-TOKENS_T miniShell::tokenize(const INPUT_T &line)
+Tokens miniShell::tokenize(const Input &line)
 {
-    TOKENS_T tokens{};
+    Tokens tokens{};
     std::stringstream ss(line);
-    TOKEN_T token;
+    Token token;
     while (ss >> token) {
         tokens.push_back(token);
     }
     return tokens;
 }
 
-void miniShell::parser(const TOKENS_T &tokens)
+void miniShell::parser(const Tokens &tokens)
 {
     Command command{};
     auto it = tokens.begin();
@@ -122,23 +128,25 @@ void miniShell::parser(const TOKENS_T &tokens)
         command.argv.push_back(*it);
     }
     while (it != tokens.end()) {
-        Redirection redirection{};
+        Redirect redirect{};
         if (*it == "<") {
-            redirection.mode = Redirection::Mode_t::input;
-            redirection.filename = *(++it);
+            redirect.mode = Redirect::Mode_t::input;
+            redirect.filename = *(++it);
         }
         if (*it == ">") {
-            redirection.mode = Redirection::Mode_t::output;
-            redirection.filename = *(++it);
+            redirect.mode = Redirect::Mode_t::output;
+            redirect.filename = *(++it);
         }
         if (*it == ">>") {
-            redirection.mode = Redirection::Mode_t::append;
-            redirection.filename = *(++it);
+            redirect.mode = Redirect::Mode_t::append;
+            redirect.filename = *(++it);
         }
         ++it;
-        command.redirections.push_back(redirection);
+        command.redirections.push_back(std::move(redirect));
     }
-    m_commands.push_back(std::move(command));
+    if (!command.argv.empty()) {
+        m_commands.push_back(std::move(command));
+    }
 }
 
 void miniShell::executeCommands()
@@ -155,14 +163,14 @@ void miniShell::executeCommands()
 int miniShell::runCommand(const Command &command)
 {
     if (command.argv[0] == "exit") {
-        return shellCommand(command);
+        return shellFork(command);
     }
     else {
-        return execCommand(command);
+        return execFork(command);
     }
 }
 
-int miniShell::shellCommand(const Command &command)
+int miniShell::shellFork(const Command &command)
 {
     if (command.argv[0] == "exit") {
         exit(0);
@@ -170,7 +178,37 @@ int miniShell::shellCommand(const Command &command)
     return 0;
 }
 
-int miniShell::execCommand(const Command &command)
+void miniShell::execCommand(const Command &command)
+{
+    for (const auto &[mode, filename]: command.redirections) {
+        if (mode == Redirect::Mode_t::input) {
+            const int fd = open(filename.data(), O_RDONLY);
+            dup2(fd, STDIN_FILENO);
+        }
+        if (mode == Redirect::Mode_t::output) {
+            const int fd = open(filename.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+            dup2(fd, STDOUT_FILENO);
+        }
+        if (mode == Redirect::Mode_t::append) {
+            const int fd = open(filename.data(),O_WRONLY | O_CREAT | O_APPEND, S_IRWXU);
+            dup2(fd, STDOUT_FILENO);
+        }
+    }
+    vector<char *> argv{};
+    argv.reserve(command.argv.size());
+    for (auto &it: command.argv) {
+        argv.push_back(strdup(it.c_str()));
+    }
+    argv.push_back(nullptr);
+    execvp(argv[0], argv.data());
+    perror("execvp error");
+    for (const auto &it: argv) {
+        free(it);
+    }
+    exit(-1);
+}
+
+int miniShell::execFork(const Command &command)
 {
     const pid_t rc = fork();
     if (rc < 0) {
@@ -178,18 +216,8 @@ int miniShell::execCommand(const Command &command)
         return -1;
     }
     if (rc == 0) {
-        vector<char *> argv{};
-        argv.reserve(command.argv.size());
-        for (auto &it: command.argv) {
-            argv.push_back(strdup(it.c_str()));
-        }
-        argv.push_back(nullptr);
-        execvp(argv[0], argv.data());
-        perror("execvp error");
-        for (const auto &it: argv) {
-            free(it);
-        }
-        exit(-1);
+        execCommand(command);
+        return -1;
     }
     else {
         int *status{};
