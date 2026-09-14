@@ -164,6 +164,9 @@ int miniShell::runCommand(const Command &command)
 
 int miniShell::shellCommand(const Command &command)
 {
+    if (command.argv[0] == "exit") {
+        exit(0);
+    }
     return 0;
 }
 
