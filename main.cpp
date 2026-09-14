@@ -23,13 +23,15 @@ namespace
 {
     struct Redirection
     {
-        enum Type_t
+        enum class Mode_t
         {
-            Input, Output, Append
+            input,
+            output,
+            append
         };
 
-        Type_t type;
-        FILENAMES_T filename;
+        Mode_t mode{};
+        FILENAMES_T filename{};
     };
 
     struct Command
@@ -112,7 +114,30 @@ TOKENS_T miniShell::tokenize(const INPUT_T &line)
 void miniShell::parser(const TOKENS_T &tokens)
 {
     Command command{};
-    command.argv = tokens;
+    auto it = tokens.begin();
+    for (; it != tokens.end(); ++it) {
+        if (*it == "<" ||
+            *it == ">" ||
+            *it == ">>") { break; }
+        command.argv.push_back(*it);
+    }
+    while (it != tokens.end()) {
+        Redirection redirection{};
+        if (*it == "<") {
+            redirection.mode = Redirection::Mode_t::input;
+            redirection.filename = *(++it);
+        }
+        if (*it == ">") {
+            redirection.mode = Redirection::Mode_t::output;
+            redirection.filename = *(++it);
+        }
+        if (*it == ">>") {
+            redirection.mode = Redirection::Mode_t::append;
+            redirection.filename = *(++it);
+        }
+        ++it;
+        command.redirections.push_back(redirection);
+    }
     m_commands.push_back(std::move(command));
 }
 
