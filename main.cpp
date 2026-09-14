@@ -26,7 +26,6 @@ namespace
     {
         enum class Mode_t
         {
-            non ,
             input ,
             output ,
             append ,
@@ -78,8 +77,8 @@ namespace
         //执行命令
         static void executeCommands(const Commands& commands);
 
-        //检查是否为内置shell命令
-        static int runCommand(const Command& command);
+        //执行单条独立命令
+        static int singleCommand(const Command& command);
 
         //内建shell命令
         static int shellFork(const Command& command);
@@ -182,12 +181,12 @@ void miniShell::executeCommands(const Commands& commands)
 {
     for (auto& it : commands) {
         if (it.op == Command::Op::_non) {
-            runCommand(it);
+            singleCommand(it);
         }
     }
 }
 
-int miniShell::runCommand(const Command& command)
+int miniShell::singleCommand(const Command& command)
 {
     if (command.argv.empty()) {
         return 0;
