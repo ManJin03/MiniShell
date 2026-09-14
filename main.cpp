@@ -125,9 +125,14 @@ Tokens miniShell::tokenize(const Input& line)
 Commands miniShell::parser(const Tokens& tokens)
 {
     Commands commands{};
-    {
+    for (auto it = tokens.begin() ; it != tokens.end() ;) {
         Command command{};
-        for (auto it = tokens.begin() ; it != tokens.end() ; ++it) {
+        for (; it != tokens.end() ; ++it) {
+            if (*it == ";" || *it == "&&" || *it == "||" || *it == "|") {
+                //TODO:op
+                ++it;
+                break;
+            }
             if (*it == "<" || *it == ">" || *it == ">>") {
                 Redirect redirect{};
                 if (*it == "<") {
