@@ -187,13 +187,16 @@ miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
             command.argv.push_back(*it);
         }
         commands.emplace_back(std::move(command));
-    }
+    } //解析命令与运算符
     Node_ptr root{};
+    if (commands.empty()) {
+        return root;
+    }
     if (ops.empty()) {
         root = std::move(std::make_unique<ASTNode>(ASTNode{
             ASTNode::Op::Command , std::move(commands[0]) , {}
         }));
-    }
+    } //单命令
     else if (ops[0] == ASTNode::Op::Pipe) {
         auto node1 = std::move(std::make_unique<ASTNode>(ASTNode{
             .op = ASTNode::Op::Command , .command = std::move(commands[0])
@@ -206,17 +209,21 @@ miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
         }));
         root->children.push_back(std::move(node1));
         root->children.push_back(std::move(node2));
-    }
+    } //管道命令
     return root;
 }
 
 void miniShell::executeAST(const ASTNode* node)
 {
-    if (node->op == ASTNode::Op::Command) {
-        singleCommand(node->command);
-    }
-    else if (node->op == ASTNode::Op::Pipe) {
-        pipeCommand(node);
+    switch (node->op) {
+        case ASTNode::Op::Command:
+            singleCommand(node->command);
+            break;
+        case ASTNode::Op::Pipe:
+            pipeCommand(node);
+            break;
+        default:
+            break;
     }
 }
 
@@ -316,19 +323,22 @@ void miniShell::redirectCommand(const Redirections& redirections)
     for (const auto& [mode, filename] : redirections) {
         int oflags{};
         int fd2{};
-        if (mode == Redirect::Mode_t::input) {
-            oflags = O_RDONLY;
-            fd2 = STDIN_FILENO;
+        switch (mode) {
+            case Redirect::Mode_t::input:
+                oflags = O_RDONLY;
+                fd2 = STDIN_FILENO;
+                break;
+            case Redirect::Mode_t::output:
+                oflags = O_WRONLY | O_CREAT | O_TRUNC;
+                fd2 = STDOUT_FILENO;
+                break;
+            case Redirect::Mode_t::append:
+                oflags = O_WRONLY | O_CREAT | O_APPEND;
+                fd2 = STDOUT_FILENO;
+                break;
+            default:
+                return;
         }
-        if (mode == Redirect::Mode_t::output) {
-            oflags = O_WRONLY | O_CREAT | O_TRUNC;
-            fd2 = STDOUT_FILENO;
-        }
-        if (mode == Redirect::Mode_t::append) {
-            oflags = O_WRONLY | O_CREAT | O_APPEND;
-            fd2 = STDOUT_FILENO;
-        }
-
         if (const int fd = open(filename.data() , oflags , S_IRWXU) ; fd == -1) {
             perror("direct open error");
             _exit(EXIT_FAILURE);
