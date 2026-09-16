@@ -2,6 +2,7 @@
 // Created by 33550 on 2026/8/31.
 //
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unistd.h>
@@ -39,20 +40,27 @@ namespace miniShell
 
     struct Command
     {
-        enum class Op
-        {
-            _non ,
-            _and ,
-            _or ,
-            _pipe ,
-        };
-
         Progress argv{};
         Redirections redirections{};
-        Op op{};
     };
 
-    using Commands = vector<Command>;
+    struct ASTNode
+    {
+        enum class Op
+        {
+            Command ,
+            Pipe ,
+            And ,
+            Or ,
+            Sequence ,
+        };
+
+        Op op{};
+        Command command{};
+        vector<std::unique_ptr<ASTNode>> children{};
+    };
+
+    using Node_ptr = std::unique_ptr<ASTNode>;
 
     class Shell
     {
@@ -79,14 +87,17 @@ namespace miniShell
     //将输入拆成一个一个的独立单元，方便解析
     static Tokens tokenize(const Input& line);
 
-    //解析输入单元，填充命令
-    static Commands parser(const Tokens& tokens);
+    //解析输入单元，填充ASTNode
+    static Node_ptr parser(const Tokens& tokens);
 
     //执行命令
-    static void executeCommands(const Commands& commands);
+    static void executeAST(const ASTNode* node);
 
     //执行单条独立命令
     static int singleCommand(const Command& command);
+
+    //执行管道命令
+    static int pipeCommand(const ASTNode* node);
 
     //内建shell命令
     static int shellFork(const Command& command);
@@ -115,13 +126,15 @@ void miniShell::Shell::run() const
         Input line;
         getline(cin , line);
         Tokens tokens{tokenize(line)};
-        Commands commands{parser(tokens)};
-        executeCommands(commands);
+        if (tokens.empty()) { continue; }
+        Node_ptr root{parser(tokens)};
+        if (root) { executeAST(root.get()); }
     }
 }
 
 miniShell::Tokens miniShell::tokenize(const Input& line)
 {
+    //TODO:解析输入字符串，解析出带空格的单引号双引号参数，运算符前后必须有命令，重定向后必须有文件名
     Tokens tokens{};
     std::stringstream ss(line);
     Token token;
@@ -131,24 +144,25 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
     return tokens;
 }
 
-miniShell::Commands miniShell::parser(const Tokens& tokens)
+miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
 {
-    Commands commands{};
+    vector<Command> commands{};
+    vector<ASTNode::Op> ops{};
     for (auto it = tokens.begin() ; it != tokens.end() ;) {
         Command command{};
         for (; it != tokens.end() ; ++it) {
-            if (*it == ";" || *it == "&&" || *it == "||" || *it == "|") {
-                if (*it == ";") {
-                    command.op = Command::Op::_non;
+            if (*it == "|" || *it == "&&" || *it == "||" || *it == ";") {
+                if (*it == "|") {
+                    ops.push_back(ASTNode::Op::Pipe);
                 }
                 else if (*it == "&&") {
-                    command.op = Command::Op::_and;
+                    ops.push_back(ASTNode::Op::And);
                 }
                 else if (*it == "||") {
-                    command.op = Command::Op::_or;
+                    ops.push_back(ASTNode::Op::Or);
                 }
-                else if (*it == "|") {
-                    command.op = Command::Op::_pipe;
+                else if (*it == ";") {
+                    ops.push_back(ASTNode::Op::Sequence);
                 }
                 ++it;
                 break;
@@ -172,17 +186,37 @@ miniShell::Commands miniShell::parser(const Tokens& tokens)
             }
             command.argv.push_back(*it);
         }
-        commands.push_back(std::move(command));
+        commands.emplace_back(std::move(command));
     }
-    return commands;
+    Node_ptr root{};
+    if (ops.empty()) {
+        root = std::move(std::make_unique<ASTNode>(ASTNode{
+            ASTNode::Op::Command , std::move(commands[0]) , {}
+        }));
+    }
+    else if (ops[0] == ASTNode::Op::Pipe) {
+        auto node1 = std::move(std::make_unique<ASTNode>(ASTNode{
+            .op = ASTNode::Op::Command , .command = std::move(commands[0])
+        }));
+        auto node2 = std::move(std::make_unique<ASTNode>(ASTNode{
+            .op = ASTNode::Op::Command , .command = std::move(commands[1])
+        }));
+        root = std::move(std::make_unique<ASTNode>(ASTNode{
+            .op = ASTNode::Op::Pipe
+        }));
+        root->children.push_back(std::move(node1));
+        root->children.push_back(std::move(node2));
+    }
+    return root;
 }
 
-void miniShell::executeCommands(const Commands& commands)
+void miniShell::executeAST(const ASTNode* node)
 {
-    for (auto& it : commands) {
-        if (it.op == Command::Op::_non) {
-            singleCommand(it);
-        }
+    if (node->op == ASTNode::Op::Command) {
+        singleCommand(node->command);
+    }
+    else if (node->op == ASTNode::Op::Pipe) {
+        pipeCommand(node);
     }
 }
 
@@ -197,6 +231,40 @@ int miniShell::singleCommand(const Command& command)
     return execFork(command);
 }
 
+int miniShell::pipeCommand(const ASTNode* node)
+{
+    int pipefd[2];
+    pipe(pipefd);
+    const int rc1 = fork();
+    if (rc1 == 0) {
+        close(pipefd[0]); //关闭读端
+        if (dup2(pipefd[1] , STDOUT_FILENO) == -1) {
+            perror("rc1 dup2 error");
+        }
+        close(pipefd[1]);
+        singleCommand(node->children[0]->command);
+        exit(0);
+    }
+    const int rc2 = fork();
+    if (rc2 == 0) {
+        close(pipefd[1]); //关闭写端
+        if (dup2(pipefd[0] , STDIN_FILENO) == -1) {
+            perror("rc2 dup2 error");
+        }
+        close(pipefd[0]);
+        singleCommand(node->children[1]->command);
+        exit(0);
+    }
+    close(pipefd[0]);
+    close(pipefd[1]);
+    const int wc1 = waitpid(rc1 , nullptr , 0);
+    const int wc2 = waitpid(rc2 , nullptr , 0);
+    if (wc1 < 0 || wc2 < 0) {
+        perror("pipe waitpid error");
+    }
+    return 0;
+}
+
 int miniShell::shellFork(const Command& command)
 {
     if (command.argv[0] == "exit") {
@@ -209,7 +277,7 @@ int miniShell::execFork(const Command& command)
 {
     const pid_t rc = fork();
     if (rc < 0) {
-        perror("fork error");
+        perror("exec fork error");
         return -1;
     }
     if (rc == 0) {
@@ -219,7 +287,7 @@ int miniShell::execFork(const Command& command)
     else {
         int* status{};
         if (const pid_t wc = waitpid(rc , status , 0) ; wc < 0) {
-            perror("wait error");
+            perror("exec wait error");
             return *status;
         }
     }
@@ -262,12 +330,12 @@ void miniShell::redirectCommand(const Redirections& redirections)
         }
 
         if (const int fd = open(filename.data() , oflags , S_IRWXU) ; fd == -1) {
-            perror("open error");
+            perror("direct open error");
             _exit(EXIT_FAILURE);
         }
         else {
             if (dup2(fd , fd2) == -1) {
-                perror("dup2 error");
+                perror("direct dup2 error");
                 _exit(EXIT_FAILURE);
             }
             if (fd != fd2) {
