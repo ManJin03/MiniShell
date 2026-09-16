@@ -10,18 +10,18 @@
 #include <cstring>
 #include <fcntl.h>
 
-using std::cout;
-using std::cin;
-using std::string;
-using std::vector;
-using Token = string;
-using Tokens = vector<Token>;
-using Progress = vector<Token>;
-using Input = string;
-using Filename = string;
-
-namespace
+namespace miniShell
 {
+    using std::cout;
+    using std::cin;
+    using std::string;
+    using std::vector;
+    using Token = string;
+    using Tokens = vector<Token>;
+    using Progress = vector<Token>;
+    using Input = string;
+    using Filename = string;
+
     struct Redirect
     {
         enum class Mode_t
@@ -54,61 +54,61 @@ namespace
 
     using Commands = vector<Command>;
 
-    class miniShell
+    class Shell
     {
     public:
         //初始化一个单例shell
-        static miniShell& init(string path);
+        static Shell& init(string path);
 
         //循环运行
         void run() const;
 
-        miniShell(const miniShell&) = delete;
+        Shell(const Shell&) = delete;
 
-        miniShell& operator=(const miniShell&) = delete;
+        Shell& operator=(const Shell&) = delete;
 
     private:
-        //将输入拆成一个一个的独立单元，方便解析
-        static Tokens tokenize(const Input& line);
+        Shell() = default;
 
-        //解析输入单元，填充命令
-        static Commands parser(const Tokens& tokens);
-
-        //执行命令
-        static void executeCommands(const Commands& commands);
-
-        //执行单条独立命令
-        static int singleCommand(const Command& command);
-
-        //内建shell命令
-        static int shellFork(const Command& command);
-
-        //外部程序fork
-        static int execFork(const Command& command);
-
-        //外部程序命令
-        static void execCommand(const Command& command);
-
-        //运行重定向指令
-        static void redirectCommand(const Redirections& redirections);
-
-        miniShell() = default;
-
-        ~miniShell() = default;
+        ~Shell() = default;
 
         string m_prompt{"$miniShell> "};
         string m_path{};
     };
+
+    //将输入拆成一个一个的独立单元，方便解析
+    static Tokens tokenize(const Input& line);
+
+    //解析输入单元，填充命令
+    static Commands parser(const Tokens& tokens);
+
+    //执行命令
+    static void executeCommands(const Commands& commands);
+
+    //执行单条独立命令
+    static int singleCommand(const Command& command);
+
+    //内建shell命令
+    static int shellFork(const Command& command);
+
+    //外部程序fork
+    static int execFork(const Command& command);
+
+    //外部程序命令
+    static void execCommand(const Command& command);
+
+    //运行重定向指令
+    static void redirectCommand(const Redirections& redirections);
 }
 
-miniShell& miniShell::init(string path)
+miniShell::Shell& miniShell::Shell::init(string path)
 {
-    static miniShell shell{};
+    static miniShell::Shell shell{};
     shell.m_path = std::move(path);
     return shell;
 }
 
-void miniShell::run() const
+void miniShell::Shell::run() const
 {
     while (true) {
         cout << m_path << m_prompt;
@@ -120,7 +120,7 @@ void miniShell::run() const
     }
 }
 
-Tokens miniShell::tokenize(const Input& line)
+miniShell::Tokens miniShell::tokenize(const Input& line)
 {
     Tokens tokens{};
     std::stringstream ss(line);
@@ -131,7 +131,7 @@ Tokens miniShell::tokenize(const Input& line)
     return tokens;
 }
 
-Commands miniShell::parser(const Tokens& tokens)
+miniShell::Commands miniShell::parser(const Tokens& tokens)
 {
     Commands commands{};
     for (auto it = tokens.begin() ; it != tokens.end() ;) {
@@ -279,7 +279,7 @@ void miniShell::redirectCommand(const Redirections& redirections)
 
 int main(int argc , char* argv[])
 {
-    const miniShell& shell = miniShell::init(argv[0]);
+    const miniShell::Shell& shell = miniShell::Shell::init(argv[0]);
     shell.run();
     return 0;
 }
