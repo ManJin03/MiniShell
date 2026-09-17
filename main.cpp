@@ -303,6 +303,7 @@ int miniShell::pipeCommand(const ASTNode* node)
 
 int miniShell::shellFork(const Command& command)
 {
+    //TODO：添加更多内建命令
     if (command.argv[0] == "exit") {
         exit(0);
     }
