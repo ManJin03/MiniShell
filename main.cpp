@@ -91,7 +91,7 @@ namespace miniShell
     static Node_ptr parser(const Tokens& tokens);
 
     //执行命令
-    static void executeAST(const ASTNode* node);
+    static int executeAST(const ASTNode* node);
 
     //执行单条独立命令
     static int singleCommand(const Command& command);
@@ -198,31 +198,32 @@ miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
         }));
     } //单命令
     else if (ops[0] == ASTNode::Op::Pipe) {
-        auto node1 = std::move(std::make_unique<ASTNode>(ASTNode{
-            .op = ASTNode::Op::Command , .command = std::move(commands[0])
-        }));
-        auto node2 = std::move(std::make_unique<ASTNode>(ASTNode{
-            .op = ASTNode::Op::Command , .command = std::move(commands[1])
-        }));
         root = std::move(std::make_unique<ASTNode>(ASTNode{
             .op = ASTNode::Op::Pipe
         }));
-        root->children.push_back(std::move(node1));
-        root->children.push_back(std::move(node2));
+        for (auto& it : commands) {
+            auto node = std::move(std::make_unique<ASTNode>(ASTNode{
+                .op = ASTNode::Op::Command , .command = std::move(it)
+            }));
+            root->children.push_back(std::move(node));
+        }
     } //管道命令
+    //TODO：解析其他命令运算符
     return root;
 }
 
-void miniShell::executeAST(const ASTNode* node)
+int miniShell::executeAST(const ASTNode* node)
 {
+    //TODO：递归调用以实现命令运算操作
     switch (node->op) {
         case ASTNode::Op::Command:
-            singleCommand(node->command);
+            return singleCommand(node->command);
             break;
         case ASTNode::Op::Pipe:
-            pipeCommand(node);
+            return pipeCommand(node);
             break;
         default:
+            return 0;
             break;
     }
 }
@@ -240,34 +241,60 @@ int miniShell::singleCommand(const Command& command)
 
 int miniShell::pipeCommand(const ASTNode* node)
 {
-    int pipefd[2];
+    //TODO：多级pipe
+    const int n = static_cast<int>(node->children.size()) - 1;
+    int pipefd[4];
     pipe(pipefd);
-    const int rc1 = fork();
+    const int rc1 = fork(); //rc1关闭读端，向写端写入
     if (rc1 == 0) {
         close(pipefd[0]); //关闭读端
         if (dup2(pipefd[1] , STDOUT_FILENO) == -1) {
             perror("rc1 dup2 error");
         }
         close(pipefd[1]);
-        singleCommand(node->children[0]->command);
+        executeAST(node->children[0].get());
         exit(0);
+    }
+    close(pipefd[1]); //关闭写端，后续再用不到fd[1]
+    if (const int wc = waitpid(rc1 , nullptr , 0) ; wc < 0) {
+        perror("pipe rc1 waitpid error");
+    }
+    for (int i = 1 ; i < n ; ++i) {
+        pipe(&pipefd[2]); //pipefd[2]读端，pipefd[3]写端
+        const int rcn = fork(); //rcn向原来的读端读取，向新建的管道写端写入
+        if (rcn == 0) {
+            close(pipefd[1]);
+            if (dup2(pipefd[0] , STDIN_FILENO) == -1) {
+                perror("rcn dup2 error");
+            }
+            close(pipefd[0]); //旧管道读取
+            close(pipefd[2]);
+            if (dup2(pipefd[3] , STDOUT_FILENO) == -1) {
+                perror("rcn dup2 error");
+            }
+            close(pipefd[3]); //新管道写入
+            executeAST(node->children[i].get());
+            exit(0);
+        }
+        close(pipefd[0]);
+        close(pipefd[3]);
+        pipefd[0] = pipefd[2]; //只保留新管道读取端，其他全部关闭
+        if (const int wc = waitpid(rcn , nullptr , 0) ; wc < 0) {
+            perror("pipe rcn waitpid error");
+        }
     }
     const int rc2 = fork();
     if (rc2 == 0) {
-        close(pipefd[1]); //关闭写端
         if (dup2(pipefd[0] , STDIN_FILENO) == -1) {
             perror("rc2 dup2 error");
         }
         close(pipefd[0]);
-        singleCommand(node->children[1]->command);
+        executeAST(node->children[n].get());
         exit(0);
     }
     close(pipefd[0]);
-    close(pipefd[1]);
-    const int wc1 = waitpid(rc1 , nullptr , 0);
-    const int wc2 = waitpid(rc2 , nullptr , 0);
-    if (wc1 < 0 || wc2 < 0) {
-        perror("pipe waitpid error");
+    if (const int wc = waitpid(rc2 , nullptr , 0) ; wc < 0) {
+        perror("pipe rc2 waitpid error");
     }
     return 0;
 }
