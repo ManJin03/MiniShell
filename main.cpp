@@ -321,10 +321,12 @@ int miniShell::execFork(const Command& command)
         return -1;
     }
     else {
-        int* status{};
-        if (const pid_t wc = waitpid(rc , status , 0) ; wc < 0) {
-            perror("exec wait error");
-            return *status;
+        int status{};
+        while (waitpid(rc , &status , 0) == -1) {
+            if (errno != EINTR) {
+                perror("waitpid error");
+                break;
+            }
         }
     }
     return 0;
