@@ -218,13 +218,10 @@ int miniShell::executeAST(const ASTNode* node)
     switch (node->op) {
         case ASTNode::Op::Command:
             return singleCommand(node->command);
-            break;
         case ASTNode::Op::Pipe:
             return pipeCommand(node);
-            break;
         default:
             return 0;
-            break;
     }
 }
 
@@ -241,62 +238,67 @@ int miniShell::singleCommand(const Command& command)
 
 int miniShell::pipeCommand(const ASTNode* node)
 {
-    //TODO：多级pipe
-    const int n = static_cast<int>(node->children.size()) - 1;
-    int pipefd[4];
-    pipe(pipefd);
-    const int rc1 = fork(); //rc1关闭读端，向写端写入
-    if (rc1 == 0) {
-        close(pipefd[0]); //关闭读端
-        if (dup2(pipefd[1] , STDOUT_FILENO) == -1) {
-            perror("rc1 dup2 error");
+    const int n = static_cast<int>(node->children.size());
+    int pre_read{-1}; //-1表示没有读端
+    vector<pid_t> pids{};
+    for (int i = 0 ; i < n ; ++i) {
+        int pipefd[2]{-1 , -1};
+        if (i < n - 1) {
+            if (pipe(pipefd) == -1) {
+                perror("pipe error");
+                break;
+            }
+        } //i<n-1才会创建pipe
+        const int rc = fork();
+        if (rc < 0) {
+            perror("fork error");
+            if (pipefd[0] != -1) { close(pipefd[0]); }
+            if (pipefd[1] != -1) { close(pipefd[1]); }
+            break;
         }
-        close(pipefd[1]);
-        executeAST(node->children[0].get());
-        exit(0);
-    }
-    close(pipefd[1]); //关闭写端，后续再用不到fd[1]
-    if (const int wc = waitpid(rc1 , nullptr , 0) ; wc < 0) {
-        perror("pipe rc1 waitpid error");
-    }
-    for (int i = 1 ; i < n ; ++i) {
-        pipe(&pipefd[2]); //pipefd[2]读端，pipefd[3]写端
-        const int rcn = fork(); //rcn向原来的读端读取，向新建的管道写端写入
-        if (rcn == 0) {
-            close(pipefd[1]);
-            if (dup2(pipefd[0] , STDIN_FILENO) == -1) {
-                perror("rcn dup2 error");
+        if (rc == 0) {
+            if (pre_read != -1) {
+                if (dup2(pre_read , STDIN_FILENO) == -1) {
+                    perror("rc stdin dup2 error");
+                    _exit(EXIT_FAILURE);
+                }
+                close(pre_read);
             }
-            close(pipefd[0]); //旧管道读取
-            close(pipefd[2]);
-            if (dup2(pipefd[3] , STDOUT_FILENO) == -1) {
-                perror("rcn dup2 error");
+            if (i < n - 1) {
+                close(pipefd[0]);
+                if (dup2(pipefd[1] , STDOUT_FILENO) == -1) {
+                    perror("rc stdout dup2 error");
+                    _exit(EXIT_FAILURE);
+                }
+                close(pipefd[1]); //新管道写入}
             }
-            close(pipefd[3]); //新管道写入
             executeAST(node->children[i].get());
-            exit(0);
+            _exit(EXIT_SUCCESS);
         }
-        close(pipefd[0]);
-        close(pipefd[3]);
-        pipefd[0] = pipefd[2]; //只保留新管道读取端，其他全部关闭
-        if (const int wc = waitpid(rcn , nullptr , 0) ; wc < 0) {
-            perror("pipe rcn waitpid error");
+        if (pre_read != -1) {
+            close(pre_read);
+            pre_read = -1;
+        } //关闭原来的读端
+        if (i < n - 1) {
+            close(pipefd[1]);
+            pre_read = pipefd[0]; //保存新的读端
+        }
+        pids.emplace_back(rc);
+    }
+    if (pre_read != -1) {
+        close(pre_read);
+        pre_read = -1;
+    }
+    for (auto pid : pids) {
+        int status{};
+        while (waitpid(pid , &status , 0) == -1) {
+            if (errno != EINTR) {
+                perror("waitpid error");
+                break;
+            }
         }
     }
-    const int rc2 = fork();
-    if (rc2 == 0) {
-        if (dup2(pipefd[0] , STDIN_FILENO) == -1) {
-            perror("rc2 dup2 error");
-        }
-        close(pipefd[0]);
-        executeAST(node->children[n].get());
-        exit(0);
-    }
-    close(pipefd[0]);
-    if (const int wc = waitpid(rc2 , nullptr , 0) ; wc < 0) {
-        perror("pipe rc2 waitpid error");
-    }
-    return 0;
+    return pids.size() == n ? 0 : -1;
 }
 
 int miniShell::shellFork(const Command& command)
