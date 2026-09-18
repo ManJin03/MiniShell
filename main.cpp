@@ -66,7 +66,7 @@ namespace miniShell
     {
     public:
         //初始化一个单例shell
-        static Shell& init(string path);
+        static Shell& init();
 
         //循环运行
         void run() const;
@@ -110,12 +110,20 @@ namespace miniShell
 
     //运行重定向指令
     static void redirectCommand(const Redirections& redirections);
+
+    static pid_t Fork();
+
+    static void Wait(pid_t pid);
 }
 
-miniShell::Shell& miniShell::Shell::init(string path)
+miniShell::Shell& miniShell::Shell::init()
 {
+    signal(SIGINT , SIG_IGN);
+    signal(SIGQUIT , SIG_IGN);
+    signal(SIGTSTP , SIG_IGN);
+    signal(SIGTTIN , SIG_IGN);
+    signal(SIGTTOU , SIG_IGN);
     static miniShell::Shell shell{};
-    shell.m_path = std::move(path);
     return shell;
 }
 
@@ -249,7 +257,7 @@ int miniShell::pipeCommand(const ASTNode* node)
                 break;
             }
         } //i<n-1才会创建pipe
-        const int rc = fork();
+        const int rc = Fork();
         if (rc < 0) {
             perror("fork error");
             if (pipefd[0] != -1) { close(pipefd[0]); }
@@ -273,7 +281,7 @@ int miniShell::pipeCommand(const ASTNode* node)
                 close(pipefd[1]); //新管道写入}
             }
             executeAST(node->children[i].get());
-            _exit(EXIT_SUCCESS);
+            _exit(127);
         }
         if (pre_read != -1) {
             close(pre_read);
@@ -290,13 +298,7 @@ int miniShell::pipeCommand(const ASTNode* node)
         pre_read = -1;
     }
     for (auto pid : pids) {
-        int status{};
-        while (waitpid(pid , &status , 0) == -1) {
-            if (errno != EINTR) {
-                perror("waitpid error");
-                break;
-            }
-        }
+        Wait(pid);
     }
     return pids.size() == n ? 0 : -1;
 }
@@ -312,24 +314,16 @@ int miniShell::shellFork(const Command& command)
 
 int miniShell::execFork(const Command& command)
 {
-    const pid_t rc = fork();
+    const pid_t rc = Fork();
     if (rc < 0) {
         perror("exec fork error");
         return -1;
     }
     if (rc == 0) {
         execCommand(command);
-        return -1;
+        _exit(127);
     }
-    else {
-        int status{};
-        while (waitpid(rc , &status , 0) == -1) {
-            if (errno != EINTR) {
-                perror("waitpid error");
-                break;
-            }
-        }
-    }
+    Wait(rc);
     return 0;
 }
 
@@ -347,7 +341,6 @@ void miniShell::execCommand(const Command& command)
     for (const auto& it : argv) {
         free(it);
     }
-    exit(-1);
 }
 
 void miniShell::redirectCommand(const Redirections& redirections)
@@ -387,9 +380,48 @@ void miniShell::redirectCommand(const Redirections& redirections)
     }
 }
 
-int main(int argc , char* argv[])
+pid_t miniShell::Fork()
 {
-    const miniShell::Shell& shell = miniShell::Shell::init(argv[0]);
+    const pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork error");
+        return -1;
+    }
+    else if (pid == 0) {
+        setpgid(0 , 0);
+        signal(SIGINT , SIG_DFL);
+        signal(SIGQUIT , SIG_DFL);
+        signal(SIGTSTP , SIG_DFL);
+        signal(SIGTTIN , SIG_DFL);
+        signal(SIGTTOU , SIG_DFL);
+    }
+    else {
+        setpgid(pid , pid);
+        if (tcsetpgrp(STDIN_FILENO , pid) == -1) {
+            perror("tcsetpgrp");
+        }
+    }
+    return pid;
+}
+
+void miniShell::Wait(pid_t pid)
+{
+    int status{};
+    while (waitpid(pid , &status , 0) == -1) {
+        if (errno != EINTR) {
+            perror("waitpid error");
+            break;
+        }
+    }
+    tcsetpgrp(STDIN_FILENO , getpgrp());
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+        write(STDOUT_FILENO , "\n" , 1);
+    }
+}
+
+int main()
+{
+    const miniShell::Shell& shell = miniShell::Shell::init();
     shell.run();
     return 0;
 }
