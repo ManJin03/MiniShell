@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fcntl.h>
 
+
 namespace miniShell
 {
     using std::cout;
@@ -22,6 +23,13 @@ namespace miniShell
     using Progress = vector<Token>;
     using Input = string;
     using Filename = string;
+
+    static volatile sig_atomic_t g_interrupted = 0;
+
+    static void sigintHandler(int)
+    {
+        g_interrupted = 1;
+    }
 
     struct Redirect
     {
@@ -84,6 +92,8 @@ namespace miniShell
         string m_path{};
     };
 
+    static Input getLine();
+
     //将输入拆成一个一个的独立单元，方便解析
     static Tokens tokenize(const Input& line);
 
@@ -110,19 +120,18 @@ namespace miniShell
 
     //运行重定向指令
     static void redirectCommand(const Redirections& redirections);
-
-    static pid_t Fork();
-
-    static void Wait(pid_t pid);
 }
 
 miniShell::Shell& miniShell::Shell::init()
 {
-    signal(SIGINT , SIG_IGN);
-    signal(SIGQUIT , SIG_IGN);
-    signal(SIGTSTP , SIG_IGN);
-    signal(SIGTTIN , SIG_IGN);
+    struct sigaction sa{};
+    sa.sa_handler = sigintHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT , &sa , nullptr);
     signal(SIGTTOU , SIG_IGN);
+    signal(SIGTTIN , SIG_IGN);
+    signal(SIGTSTP , SIG_IGN);
     static miniShell::Shell shell{};
     return shell;
 }
@@ -131,13 +140,33 @@ void miniShell::Shell::run() const
 {
     while (true) {
         cout << m_path << m_prompt;
-        Input line;
-        getline(cin , line);
+        Input line{getLine()};
+        if (line.empty()) { continue; }
         Tokens tokens{tokenize(line)};
         if (tokens.empty()) { continue; }
         Node_ptr root{parser(tokens)};
         if (root) { executeAST(root.get()); }
     }
+}
+
+miniShell::Input miniShell::getLine()
+{
+    Input line;
+    if (!getline(cin , line)) {
+        if (g_interrupted) {
+            g_interrupted = 0;
+            cout << "\n";
+            cin.clear();
+            return {};
+        }
+        if (cin.eof()) {
+            cout << "\n";
+            exit(EXIT_SUCCESS);
+        }
+        return {};
+    }
+
+    return line;
 }
 
 miniShell::Tokens miniShell::tokenize(const Input& line)
@@ -249,6 +278,7 @@ int miniShell::pipeCommand(const ASTNode* node)
     const int n = static_cast<int>(node->children.size());
     int pre_read{-1}; //-1表示没有读端
     vector<pid_t> pids{};
+    pid_t pgid = -1;
     for (int i = 0 ; i < n ; ++i) {
         int pipefd[2]{-1 , -1};
         if (i < n - 1) {
@@ -256,15 +286,18 @@ int miniShell::pipeCommand(const ASTNode* node)
                 perror("pipe error");
                 break;
             }
-        } //i<n-1才会创建pipe
-        const int rc = Fork();
-        if (rc < 0) {
+        }
+        const pid_t pid = fork();
+        if (pid < 0) {
             perror("fork error");
             if (pipefd[0] != -1) { close(pipefd[0]); }
             if (pipefd[1] != -1) { close(pipefd[1]); }
             break;
         }
-        if (rc == 0) {
+        if (pid == 0) {
+            if (pgid == -1) { pgid = getpid(); }
+            setpgid(0 , pgid);
+            signal(SIGINT , SIG_DFL);
             if (pre_read != -1) {
                 if (dup2(pre_read , STDIN_FILENO) == -1) {
                     perror("rc stdin dup2 error");
@@ -280,9 +313,11 @@ int miniShell::pipeCommand(const ASTNode* node)
                 }
                 close(pipefd[1]); //新管道写入}
             }
-            executeAST(node->children[i].get());
+            execCommand(node->children[i].get()->command);
             _exit(127);
         }
+        if (pgid == -1) { pgid = pid; }
+        setpgid(pid , pgid);
         if (pre_read != -1) {
             close(pre_read);
             pre_read = -1;
@@ -291,14 +326,31 @@ int miniShell::pipeCommand(const ASTNode* node)
             close(pipefd[1]);
             pre_read = pipefd[0]; //保存新的读端
         }
-        pids.emplace_back(rc);
+        pids.emplace_back(pid);
     }
     if (pre_read != -1) {
         close(pre_read);
         pre_read = -1;
     }
+    if (isatty(STDIN_FILENO)) {
+        if (tcsetpgrp(STDIN_FILENO , pgid) == -1) {
+            perror("tcsetpgrp");
+        }
+    } //设置整个管道为前台进程组
+    int status{};
     for (auto pid : pids) {
-        Wait(pid);
+        while (waitpid(pid , &status , 0) == -1) {
+            if (errno != EINTR) {
+                perror("waitpid error");
+                break;
+            }
+        }
+    }
+    if (isatty(STDIN_FILENO)) {
+        tcsetpgrp(STDIN_FILENO , getpgrp());
+    }
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+        write(STDOUT_FILENO , "\n" , 1);
     }
     return pids.size() == n ? 0 : -1;
 }
@@ -314,16 +366,36 @@ int miniShell::shellFork(const Command& command)
 
 int miniShell::execFork(const Command& command)
 {
-    const pid_t rc = Fork();
-    if (rc < 0) {
-        perror("exec fork error");
+    const pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork error");
         return -1;
     }
-    if (rc == 0) {
+    if (pid == 0) {
+        setpgid(0 , getpid());
+        signal(SIGINT , SIG_DFL);
         execCommand(command);
         _exit(127);
     }
-    Wait(rc);
+    setpgid(pid , pid);
+    if (isatty(STDIN_FILENO)) {
+        if (tcsetpgrp(STDIN_FILENO , pid) == -1) {
+            perror("tcsetpgrp");
+        }
+    }
+    int status{};
+    while (waitpid(pid , &status , 0) == -1) {
+        if (errno != EINTR) {
+            perror("waitpid error");
+            break;
+        }
+    }
+    if (isatty(STDIN_FILENO)) {
+        tcsetpgrp(STDIN_FILENO , getpgrp());
+    }
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+        write(STDOUT_FILENO , "\n" , 1);
+    }
     return 0;
 }
 
@@ -377,45 +449,6 @@ void miniShell::redirectCommand(const Redirections& redirections)
                 close(fd);
             }
         }
-    }
-}
-
-pid_t miniShell::Fork()
-{
-    const pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork error");
-        return -1;
-    }
-    else if (pid == 0) {
-        setpgid(0 , 0);
-        signal(SIGINT , SIG_DFL);
-        signal(SIGQUIT , SIG_DFL);
-        signal(SIGTSTP , SIG_DFL);
-        signal(SIGTTIN , SIG_DFL);
-        signal(SIGTTOU , SIG_DFL);
-    }
-    else {
-        setpgid(pid , pid);
-        if (tcsetpgrp(STDIN_FILENO , pid) == -1) {
-            perror("tcsetpgrp");
-        }
-    }
-    return pid;
-}
-
-void miniShell::Wait(pid_t pid)
-{
-    int status{};
-    while (waitpid(pid , &status , 0) == -1) {
-        if (errno != EINTR) {
-            perror("waitpid error");
-            break;
-        }
-    }
-    tcsetpgrp(STDIN_FILENO , getpgrp());
-    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
-        write(STDOUT_FILENO , "\n" , 1);
     }
 }
 
