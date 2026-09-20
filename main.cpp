@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <vector>
 #include <sys/wait.h>
+#include <pwd.h>
 #include <cstring>
 #include <fcntl.h>
 
@@ -79,6 +80,8 @@ namespace miniShell
         //循环运行
         void run() const;
 
+        void setPath(const string& path);
+
         Shell(const Shell&) = delete;
 
         Shell& operator=(const Shell&) = delete;
@@ -120,6 +123,10 @@ namespace miniShell
 
     //运行重定向指令
     static void redirectCommand(const Redirections& redirections);
+
+    static std::string pwd(bool print);
+
+    static int cd(const Command& command);
 }
 
 miniShell::Shell& miniShell::Shell::init()
@@ -133,8 +140,11 @@ miniShell::Shell& miniShell::Shell::init()
     signal(SIGTTIN , SIG_IGN);
     signal(SIGTSTP , SIG_IGN);
     static miniShell::Shell shell{};
+    shell.m_path = pwd(false);
     return shell;
 }
+
+miniShell::Shell& shell = miniShell::Shell::init();
 
 void miniShell::Shell::run() const
 {
@@ -147,6 +157,11 @@ void miniShell::Shell::run() const
         Node_ptr root{parser(tokens)};
         if (root) { executeAST(root.get()); }
     }
+}
+
+void miniShell::Shell::setPath(const string& path)
+{
+    m_path = path;
 }
 
 miniShell::Input miniShell::getLine()
@@ -267,7 +282,10 @@ int miniShell::singleCommand(const Command& command)
     if (command.argv.empty()) {
         return 0;
     }
-    if (command.argv[0] == "exit") {
+    if (command.argv[0] == "exit" ||
+        command.argv[0] == "pwd" ||
+        command.argv[0] == "cd" ||
+        command.argv[0] == "echo") {
         return shellFork(command);
     }
     return execFork(command);
@@ -361,6 +379,13 @@ int miniShell::shellFork(const Command& command)
     if (command.argv[0] == "exit") {
         exit(0);
     }
+    else if (command.argv[0] == "pwd") {
+        pwd(true);
+    }
+    else if (command.argv[0] == "cd") {
+        cd(command);
+    }
+    else if (command.argv[0] == "echo") {}
     return 0;
 }
 
@@ -452,9 +477,38 @@ void miniShell::redirectCommand(const Redirections& redirections)
     }
 }
 
+std::string miniShell::pwd(const bool print)
+{
+    std::string path{getcwd(nullptr , 0)};
+    if (print) { std::cout << "pwd> " << path << '\n'; }
+    return path;
+}
+
+int miniShell::cd(const Command& command)
+{
+    if (command.argv.size() == 1 || command.argv[1] == "~") {
+        const struct passwd* pw = getpwuid(getuid());
+        if (pw == nullptr || pw->pw_dir == nullptr) {
+            fprintf(stderr , "cannot get home dir\n");
+            return 1;
+        }
+        if (chdir(pw->pw_dir) == -1) {
+            perror("chdir");
+            return 1;
+        }
+    }
+    else {
+        if (chdir(command.argv[1].data()) == -1) {
+            perror("chdir error");
+            return -1;
+        }
+    }
+    shell.setPath(pwd(false));
+    return 0;
+}
+
 int main()
 {
-    const miniShell::Shell& shell = miniShell::Shell::init();
     shell.run();
     return 0;
 }
