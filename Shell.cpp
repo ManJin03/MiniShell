@@ -101,13 +101,6 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
     Tokens tokens{};
     Token token{};
     for (auto c{line.begin()} ; c != line.end() ; ++c) {
-        if (isspace(*c)) {
-            if (!token.empty()) {
-                tokens.push_back(token);
-                token.clear();
-            }
-            continue;
-        }
         if (*c == '|' ||
             *c == '&' ||
             *c == '\'' ||
@@ -198,10 +191,26 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
                     tokens.push_back(op);
                     break;
                 }
-                case'\'':
+                case'\'': {
+                    while (++c != line.end() && *c != '\'') { token.push_back(*c); }
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no end op \'\n";
+                        return {};
+                    }
+                    tokens.push_back(token);
+                    token.clear();
+                    continue;
+                }
                 default:
                     return {};
             }
+        }
+        if (isspace(*c)) {
+            if (!token.empty()) {
+                tokens.push_back(token);
+                token.clear();
+            }
+            continue;
         }
         token.push_back(*c);
     }
