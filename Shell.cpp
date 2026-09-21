@@ -106,7 +106,8 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
             *c == '\'' ||
             *c == '>' ||
             *c == '<' ||
-            *c == ';') {
+            *c == ';' ||
+            *c == '\"') {
             if (tokens.empty() && token.empty()) {
                 cout << "bash: syntax error, no command before op\n";
                 return {};
@@ -193,6 +194,16 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
                 }
                 case'\'': {
                     while (++c != line.end() && *c != '\'') { token.push_back(*c); }
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no end op \'\n";
+                        return {};
+                    }
+                    tokens.push_back(token);
+                    token.clear();
+                    continue;
+                }
+                case'\"': {
+                    while (++c != line.end() && *c != '\"') { token.push_back(*c); }
                     if (c == line.end()) {
                         cout << "bash: syntax error, no end op \'\n";
                         return {};
