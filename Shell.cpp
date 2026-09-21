@@ -99,10 +99,115 @@ miniShell::Input miniShell::getLine()
 miniShell::Tokens miniShell::tokenize(const Input& line)
 {
     Tokens tokens{};
-    std::stringstream ss(line);
-    Token token;
-    while (ss >> token) {
+    Token token{};
+    for (auto c{line.begin()} ; c != line.end() ; ++c) {
+        if (isspace(*c)) {
+            if (!token.empty()) {
+                tokens.push_back(token);
+                token.clear();
+            }
+            continue;
+        }
+        if (*c == '|' ||
+            *c == '&' ||
+            *c == '\'' ||
+            *c == '>' ||
+            *c == '<' ||
+            *c == ';') {
+            if (tokens.empty() && token.empty()) {
+                cout << "bash: syntax error, no command before op\n";
+                return {};
+            }
+            if (!token.empty()) {
+                tokens.push_back(token);
+                token.clear();
+            }
+            switch (*c) {
+                case'<': {
+                    while (++c != line.end() && isspace(*c)) {}
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no command after op <\n";
+                        return {};
+                    }
+                    tokens.push_back({"<"});
+                    break;
+                }
+                case';': {
+                    while (++c != line.end() && isspace(*c)) {}
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no command after op <\n";
+                        return {};
+                    }
+                    tokens.push_back({";"});
+                    break;
+                }
+                case'>': {
+                    Token op{">"};
+                    auto t{c};
+                    if (++t == line.end()) {
+                        cout << "bash: syntax error, no command after op >\n";
+                        return {};
+                    }
+                    if (*t == '>') {
+                        op.push_back(*t);
+                        ++c;
+                    }
+                    while (++c != line.end() && isspace(*c)) {}
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no command after op >\n";
+                        return {};
+                    }
+                    tokens.push_back(op);
+                    break;
+                }
+                case'|': {
+                    Token op{"|"};
+                    auto t{c};
+                    if (++t == line.end()) {
+                        cout << "bash: syntax error, no command after op |\n";
+                        return {};
+                    }
+                    if (*t == '|') {
+                        op.push_back(*t);
+                        ++c;
+                    }
+                    while (++c != line.end() && isspace(*c)) {}
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no command after op |\n";
+                        return {};
+                    }
+                    tokens.push_back(op);
+                    break;
+                }
+                case'&': {
+                    Token op{"&"};
+                    auto t{c};
+                    if (++t == line.end()) {
+                        cout << "bash: syntax error, no command after op &\n";
+                        return {};
+                    }
+                    if (*t == *c) {
+                        op.push_back(*t);
+                        ++c;
+                    }
+                    while (++c != line.end() && isspace(*c)) {}
+                    if (c == line.end()) {
+                        cout << "bash: syntax error, no command after op &\n";
+                        return {};
+                    }
+                    tokens.push_back(op);
+                    break;
+                }
+                case'\'':
+                default:
+                    return {};
+            }
+        }
+        token.push_back(*c);
+    }
+    if (!token.empty()) {
         tokens.push_back(token);
+        token.clear();
     }
     return tokens;
 }
@@ -114,7 +219,7 @@ miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
     for (auto it = tokens.begin() ; it != tokens.end() ;) {
         Command command{};
         for (; it != tokens.end() ; ++it) {
-            if (*it == "|" || *it == "&&" || *it == "||" || *it == ";") {
+            if (*it == "|" || *it == "&&" || *it == "||" || *it == ";" || *it == "&") {
                 if (*it == "|") {
                     ops.push_back(ASTNode::Op::Pipe);
                 }
@@ -171,6 +276,17 @@ miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
             root->children.push_back(std::move(node));
         }
     } //管道命令
+    else {
+        root = std::move(std::make_unique<ASTNode>(ASTNode{
+            .op = ASTNode::Op::Sequence
+        }));
+        for (auto& it : commands) {
+            auto node = std::move(std::make_unique<ASTNode>(ASTNode{
+                .op = ASTNode::Op::Command , .command = std::move(it)
+            }));
+            root->children.push_back(std::move(node));
+        }
+    }
     //TODO：解析其他命令运算符
     return root;
 }
@@ -182,6 +298,11 @@ int miniShell::executeAST(const ASTNode* node)
             return singleCommand(node->command);
         case ASTNode::Op::Pipe:
             return pipeCommand(node);
+        case ASTNode::Op::Sequence: {
+            for (auto& it : node->children) {
+                singleCommand(it->command);
+            }
+        }
         default:
             return 0;
     }
