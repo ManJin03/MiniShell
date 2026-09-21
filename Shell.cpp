@@ -17,6 +17,14 @@ namespace miniShell
 
     static void sigintHandler(int) { g_interrupted = 1; }
 
+    //根据 waitpid 返回的状态计算子进程退出码
+    static int exitStatus(int status)
+    {
+        if (WIFEXITED(status)) { return WEXITSTATUS(status); }
+        if (WIFSIGNALED(status)) { return 128 + WTERMSIG(status); }
+        return status;
+    }
+
     static Input getLine();
 
     //将输入拆成一个一个的独立单元，方便解析
@@ -24,6 +32,18 @@ namespace miniShell
 
     //解析输入单元，填充ASTNode
     static Node_ptr parser(const Tokens& tokens);
+
+    //解析单条命令（argv 与重定向），遇到连接运算符停止
+    static Command parseCommand(const Tokens& tokens , size_t& pos);
+
+    //解析管道：command ('|' command)*
+    static Node_ptr parsePipeline(const Tokens& tokens , size_t& pos);
+
+    //解析 && 与 || ，二者优先级相同且左结合
+    static Node_ptr parseAndOr(const Tokens& tokens , size_t& pos);
+
+    //解析顺序执行：expr (';' expr)*
+    static Node_ptr parseSequence(const Tokens& tokens , size_t& pos);
 
     //执行命令
     static int executeAST(const ASTNode* node);
@@ -232,83 +252,94 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
     return tokens;
 }
 
-miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
+miniShell::Command miniShell::parseCommand(const Tokens& tokens , size_t& pos)
+{
+    Command command{};
+    while (pos < tokens.size()) {
+        const Token& token{tokens[pos]};
+        if (token == "|" || token == "&&" || token == "||" || token == ";" || token == "&") {
+            break;
+        }
+        if (token == "<" || token == ">" || token == ">>") {
+            Redirect redirect{};
+            if (token == "<") {
+                redirect.mode = Redirect::Mode_t::input;
+            }
+            else if (token == ">") {
+                redirect.mode = Redirect::Mode_t::output;
+            }
+            else {
+                redirect.mode = Redirect::Mode_t::append;
+            }
+            if (pos + 1 >= tokens.size()) { break; } //缺少重定向文件名
+            redirect.filename = tokens[++pos];
+            command.redirections.push_back(std::move(redirect));
+            ++pos;
+            continue;
+        }
+        command.argv.push_back(token);
+        ++pos;
+    }
+    return command;
+}
+
+miniShell::Node_ptr miniShell::parsePipeline(const Tokens& tokens , size_t& pos)
 {
     vector<Command> commands{};
-    vector<ASTNode::Op> ops{};
-    for (auto it = tokens.begin() ; it != tokens.end() ;) {
-        Command command{};
-        for (; it != tokens.end() ; ++it) {
-            if (*it == "|" || *it == "&&" || *it == "||" || *it == ";" || *it == "&") {
-                if (*it == "|") {
-                    ops.push_back(ASTNode::Op::Pipe);
-                }
-                else if (*it == "&&") {
-                    ops.push_back(ASTNode::Op::And);
-                }
-                else if (*it == "||") {
-                    ops.push_back(ASTNode::Op::Or);
-                }
-                else if (*it == ";") {
-                    ops.push_back(ASTNode::Op::Sequence);
-                }
-                ++it;
-                break;
-            }
-            if (*it == "<" || *it == ">" || *it == ">>") {
-                Redirect redirect{};
-                if (*it == "<") {
-                    redirect.mode = Redirect::Mode_t::input;
-                    redirect.filename = *(++it);
-                }
-                else if (*it == ">") {
-                    redirect.mode = Redirect::Mode_t::output;
-                    redirect.filename = *(++it);
-                }
-                else if (*it == ">>") {
-                    redirect.mode = Redirect::Mode_t::append;
-                    redirect.filename = *(++it);
-                }
-                command.redirections.push_back(std::move(redirect));
-                continue;
-            }
-            command.argv.push_back(*it);
-        }
-        commands.emplace_back(std::move(command));
-    } //解析命令与运算符
-    Node_ptr root{};
-    if (commands.empty()) {
-        return root;
+    commands.push_back(parseCommand(tokens , pos));
+    while (pos < tokens.size() && tokens[pos] == "|") {
+        ++pos;
+        commands.push_back(parseCommand(tokens , pos));
     }
-    if (ops.empty()) {
-        root = std::move(std::make_unique<ASTNode>(ASTNode{
-            ASTNode::Op::Command , std::move(commands[0]) , {}
-        }));
+    if (commands.size() == 1) {
+        return std::make_unique<ASTNode>(ASTNode{
+            .op = ASTNode::Op::Command , .command = std::move(commands[0])
+        });
     } //单命令
-    else if (ops[0] == ASTNode::Op::Pipe) {
-        root = std::move(std::make_unique<ASTNode>(ASTNode{
-            .op = ASTNode::Op::Pipe
+    auto node{std::make_unique<ASTNode>(ASTNode{.op = ASTNode::Op::Pipe})};
+    for (auto& it : commands) {
+        node->children.push_back(std::make_unique<ASTNode>(ASTNode{
+            .op = ASTNode::Op::Command , .command = std::move(it)
         }));
-        for (auto& it : commands) {
-            auto node = std::move(std::make_unique<ASTNode>(ASTNode{
-                .op = ASTNode::Op::Command , .command = std::move(it)
-            }));
-            root->children.push_back(std::move(node));
-        }
     } //管道命令
-    else {
-        root = std::move(std::make_unique<ASTNode>(ASTNode{
-            .op = ASTNode::Op::Sequence
-        }));
-        for (auto& it : commands) {
-            auto node = std::move(std::make_unique<ASTNode>(ASTNode{
-                .op = ASTNode::Op::Command , .command = std::move(it)
-            }));
-            root->children.push_back(std::move(node));
+    return node;
+}
+
+miniShell::Node_ptr miniShell::parseAndOr(const Tokens& tokens , size_t& pos)
+{
+    Node_ptr left{parsePipeline(tokens , pos)};
+    while (pos < tokens.size() && (tokens[pos] == "&&" || tokens[pos] == "||")) {
+        const ASTNode::Op op{tokens[pos] == "&&" ? ASTNode::Op::And : ASTNode::Op::Or};
+        ++pos;
+        Node_ptr right{parsePipeline(tokens , pos)};
+        auto node{std::make_unique<ASTNode>(ASTNode{.op = op})};
+        node->children.push_back(std::move(left));
+        node->children.push_back(std::move(right));
+        left = std::move(node);
+    } //左结合，形成二叉树
+    return left;
+}
+
+miniShell::Node_ptr miniShell::parseSequence(const Tokens& tokens , size_t& pos)
+{
+    Node_ptr first{parseAndOr(tokens , pos)};
+    while (pos < tokens.size() && (tokens[pos] == ";" || tokens[pos] == "&")) {
+        ++pos;
+        Node_ptr next{parseAndOr(tokens , pos)};
+        if (first->op != ASTNode::Op::Sequence) {
+            auto sequence{std::make_unique<ASTNode>(ASTNode{.op = ASTNode::Op::Sequence})};
+            sequence->children.push_back(std::move(first));
+            first = std::move(sequence);
         }
-    }
-    //TODO：解析其他命令运算符
-    return root;
+        first->children.push_back(std::move(next));
+    } //展开为序列节点
+    return first;
+}
+
+miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
+{
+    size_t pos{0};
+    return parseSequence(tokens , pos);
 }
 
 int miniShell::executeAST(const ASTNode* node)
@@ -318,10 +349,26 @@ int miniShell::executeAST(const ASTNode* node)
             return singleCommand(node->command);
         case ASTNode::Op::Pipe:
             return pipeCommand(node);
+        case ASTNode::Op::And: {
+            const int status{executeAST(node->children[0].get())};
+            if (status == 0) {
+                return executeAST(node->children[1].get());
+            } //左侧成功才执行右侧
+            return status;
+        }
+        case ASTNode::Op::Or: {
+            const int status{executeAST(node->children[0].get())};
+            if (status != 0) {
+                return executeAST(node->children[1].get());
+            } //左侧失败才执行右侧
+            return status;
+        }
         case ASTNode::Op::Sequence: {
+            int status{0};
             for (auto& it : node->children) {
-                singleCommand(it->command);
+                status = executeAST(it.get());
             }
+            return status;
         }
         default:
             return 0;
@@ -421,7 +468,10 @@ int miniShell::pipeCommand(const ASTNode* node)
     if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
         write(STDOUT_FILENO , "\n" , 1);
     }
-    return pids.size() == n ? 0 : -1;
+    if (pids.size() != static_cast<size_t>(n)) {
+        return -1;
+    }
+    return exitStatus(status); //管道以最后一个命令的退出码为准
 }
 
 int miniShell::shellFork(const Command& command)
@@ -430,41 +480,40 @@ int miniShell::shellFork(const Command& command)
         exit(0);
     }
     if (command.argv[0] == "cd") {
-        cd(command);
+        return cd(command); //cd 需在父进程中执行才能改变 shell 的工作目录
     }
-    else {
-        const pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork error");
-            return -1;
-        }
-        if (pid == 0) {
-            setpgid(0 , getpid());
-            signal(SIGINT , SIG_DFL);
-            shellCommand(command);
-            _exit(127);
-        }
-        setpgid(pid , pid);
-        if (isatty(STDIN_FILENO)) {
-            if (tcsetpgrp(STDIN_FILENO , pid) == -1) {
-                perror("tcsetpgrp");
-            }
-        }
-        int status{};
-        while (waitpid(pid , &status , 0) == -1) {
-            if (errno != EINTR) {
-                perror("waitpid error");
-                break;
-            }
-        }
-        if (isatty(STDIN_FILENO)) {
-            tcsetpgrp(STDIN_FILENO , getpgrp());
-        }
-        if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
-            write(STDOUT_FILENO , "\n" , 1);
+    const pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork error");
+        return -1;
+    }
+    if (pid == 0) {
+        setpgid(0 , getpid());
+        signal(SIGINT , SIG_DFL);
+        shellCommand(command);
+        cout.flush(); //_exit 不会刷新 stdio 缓冲区，需手动刷新
+        _exit(EXIT_SUCCESS); //内建命令执行完即正常退出
+    }
+    setpgid(pid , pid);
+    if (isatty(STDIN_FILENO)) {
+        if (tcsetpgrp(STDIN_FILENO , pid) == -1) {
+            perror("tcsetpgrp");
         }
     }
-    return 0;
+    int status{};
+    while (waitpid(pid , &status , 0) == -1) {
+        if (errno != EINTR) {
+            perror("waitpid error");
+            break;
+        }
+    }
+    if (isatty(STDIN_FILENO)) {
+        tcsetpgrp(STDIN_FILENO , getpgrp());
+    }
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+        write(STDOUT_FILENO , "\n" , 1);
+    }
+    return exitStatus(status);
 }
 
 int miniShell::execFork(const Command& command)
@@ -499,7 +548,7 @@ int miniShell::execFork(const Command& command)
     if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
         write(STDOUT_FILENO , "\n" , 1);
     }
-    return 0;
+    return exitStatus(status);
 }
 
 void miniShell::shellCommand(const Command& command)
