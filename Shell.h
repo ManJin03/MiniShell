@@ -11,13 +11,9 @@ namespace miniShell
     class Shell
     {
     public:
-        void run();
+        static void run();
 
         Shell();
-
-    private:
-        std::string m_prompt{" $miniShell> "};
-        std::string m_path{};
     };
 } // miniShell
 

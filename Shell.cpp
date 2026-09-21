@@ -10,9 +10,20 @@
 #include <cstring>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <unordered_map>
 
 namespace miniShell
 {
+    std::unordered_map<string,string> env;
+
+    std::string path{};
+
+    //提示符默认值，变量被 unexport 后回退到该值
+    const string defaultPrompt{"$miniShell> "};
+
+    //读取提示符，变量未定义时返回默认值
+    static const string& prompt();
+
     static volatile sig_atomic_t g_interrupted{0};
 
     static void sigintHandler(int) { g_interrupted = 1; }
@@ -31,7 +42,7 @@ namespace miniShell
     static Tokens tokenize(const Input& line);
 
     //解析输入单元，填充ASTNode
-    static Node_ptr parser(const Tokens& tokens);
+    static Node_ptr parser(Tokens& tokens);
 
     //解析单条命令（argv 与重定向），遇到连接运算符停止
     static Command parseCommand(const Tokens& tokens , size_t& pos);
@@ -70,6 +81,12 @@ namespace miniShell
     static void redirectCommand(const Redirections& redirections);
 } // miniShell
 
+const miniShell::string& miniShell::prompt()
+{
+    if (env.contains("prompt")) { return env.at("prompt"); }
+    return defaultPrompt; //避免 env["prompt"] 在变量缺失时插入空值
+}
+
 miniShell::Shell::Shell()
 {
     struct sigaction sa{};
@@ -80,14 +97,15 @@ miniShell::Shell::Shell()
     signal(SIGTTOU , SIG_IGN);
     signal(SIGTTIN , SIG_IGN);
     signal(SIGTSTP , SIG_IGN);
-    m_path = pwd(false);
+    path = pwd(false);
+    env["prompt"] = defaultPrompt;
 }
 
 void miniShell::Shell::run()
 {
     while (true) {
-        m_path = pwd(false);
-        cout << m_path << m_prompt;
+        path = pwd(false);
+        cout << path << prompt();
         Input line{getLine()};
         if (line.empty()) { continue; }
         Tokens tokens{tokenize(line)};
@@ -336,8 +354,15 @@ miniShell::Node_ptr miniShell::parseSequence(const Tokens& tokens , size_t& pos)
     return first;
 }
 
-miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
+miniShell::Node_ptr miniShell::parser(Tokens& tokens)
 {
+    for (auto& token : tokens) {
+        if (!token.empty() && token[0] == '$') {
+            if (string key{token.substr(1)} ; env.contains(key)) {
+                token = env.at(key);
+            }
+        }
+    }
     size_t pos{0};
     return parseSequence(tokens , pos);
 }
@@ -383,7 +408,10 @@ int miniShell::singleCommand(const Command& command)
     if (command.argv[0] == "exit" ||
         command.argv[0] == "pwd" ||
         command.argv[0] == "cd" ||
-        command.argv[0] == "echo") {
+        command.argv[0] == "echo" ||
+        command.argv[0] == "export" ||
+        command.argv[0] == "unexport" ||
+        command.argv[0] == "env") {
         return shellFork(command);
     }
     return execFork(command);
@@ -480,7 +508,35 @@ int miniShell::shellFork(const Command& command)
         exit(0);
     }
     if (command.argv[0] == "cd") {
-        return cd(command); //cd 需在父进程中执行才能改变 shell 的工作目录
+        const int st{cd(command)};
+        path = pwd(false);
+        return st; //cd 需在父进程中执行才能改变 shell 的工作目录
+    }
+    if (command.argv[0] == "export") {
+        if (command.argv.size() < 3) {
+            std::cerr << "export: usage: export <name> <value>\n";
+            return -1;
+        }
+        env[command.argv[1]] = command.argv[2];
+        return 0;
+    }
+    if (command.argv[0] == "unexport") {
+        if (command.argv.size() < 2) {
+            std::cerr << "unexport: usage: unexport <name>\n";
+            return -1;
+        }
+        if (env.contains(command.argv[1])) {
+            env.erase(env.find(command.argv[1]));
+            return 0;
+        }
+        std::cerr << "unexport: " << command.argv[1] << ": not defined\n";
+        return -1;
+    }
+    if (command.argv[0] == "env") {
+        for (const auto& i : env) {
+            cout << i.first << ":" << i.second << '\n';
+        }
+        return 0;
     }
     const pid_t pid = fork();
     if (pid < 0) {

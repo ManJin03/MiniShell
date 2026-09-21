@@ -19,7 +19,7 @@ std::string miniShell::pwd(const bool print)
 int miniShell::cd(const Command& command)
 {
     if (command.argv.size() == 1 || command.argv[1] == "~") {
-        const struct passwd* pw = getpwuid(getuid());
+        const passwd* pw = getpwuid(getuid());
         if (pw == nullptr || pw->pw_dir == nullptr) {
             fprintf(stderr , "cannot get home dir\n");
             return 1;
