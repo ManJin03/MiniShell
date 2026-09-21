@@ -37,3 +37,16 @@ int miniShell::cd(const Command& command)
     }
     return 0;
 }
+
+void miniShell::echo(const Command& command)
+{
+    auto& argv = command.argv;
+    auto it{argv.begin()};
+    ++it;
+    cout << "echo> ";
+    while (it != argv.end()) {
+        cout << *it << ' ';
+        ++it;
+    }
+    cout << '\n';
+}

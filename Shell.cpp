@@ -34,11 +34,14 @@ namespace miniShell
     //执行管道命令
     static int pipeCommand(const ASTNode* node);
 
-    //内建shell命令
+    //内建命令fork
     static int shellFork(const Command& command);
 
     //外部程序fork
     static int execFork(const Command& command);
+
+    //内建命令执行
+    static void shellCommand(const Command& command);
 
     //外部程序命令
     static void execCommand(const Command& command);
@@ -60,7 +63,6 @@ miniShell::Shell::Shell()
     m_path = pwd(false);
 }
 
-z
 void miniShell::Shell::run()
 {
     while (true) {
@@ -91,13 +93,11 @@ miniShell::Input miniShell::getLine()
         }
         return {};
     }
-
     return line;
 }
 
 miniShell::Tokens miniShell::tokenize(const Input& line)
 {
-    //TODO:解析输入字符串，解析出带空格的单引号双引号参数，运算符前后必须有命令，重定向后必须有文件名
     Tokens tokens{};
     std::stringstream ss(line);
     Token token;
@@ -177,7 +177,6 @@ miniShell::Node_ptr miniShell::parser(const Tokens& tokens)
 
 int miniShell::executeAST(const ASTNode* node)
 {
-    //TODO：递归调用以实现命令运算操作
     switch (node->op) {
         case ASTNode::Op::Command:
             return singleCommand(node->command);
@@ -289,13 +288,41 @@ int miniShell::shellFork(const Command& command)
     if (command.argv[0] == "exit") {
         exit(0);
     }
-    if (command.argv[0] == "pwd") {
-        pwd(true);
-    }
-    else if (command.argv[0] == "cd") {
+    if (command.argv[0] == "cd") {
         cd(command);
     }
-    else if (command.argv[0] == "echo") {}
+    else {
+        const pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork error");
+            return -1;
+        }
+        if (pid == 0) {
+            setpgid(0 , getpid());
+            signal(SIGINT , SIG_DFL);
+            shellCommand(command);
+            _exit(127);
+        }
+        setpgid(pid , pid);
+        if (isatty(STDIN_FILENO)) {
+            if (tcsetpgrp(STDIN_FILENO , pid) == -1) {
+                perror("tcsetpgrp");
+            }
+        }
+        int status{};
+        while (waitpid(pid , &status , 0) == -1) {
+            if (errno != EINTR) {
+                perror("waitpid error");
+                break;
+            }
+        }
+        if (isatty(STDIN_FILENO)) {
+            tcsetpgrp(STDIN_FILENO , getpgrp());
+        }
+        if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+            write(STDOUT_FILENO , "\n" , 1);
+        }
+    }
     return 0;
 }
 
@@ -332,6 +359,17 @@ int miniShell::execFork(const Command& command)
         write(STDOUT_FILENO , "\n" , 1);
     }
     return 0;
+}
+
+void miniShell::shellCommand(const Command& command)
+{
+    redirectCommand(command.redirections);
+    if (command.argv[0] == "pwd") {
+        pwd(true);
+    }
+    else if (command.argv[0] == "echo") {
+        echo(command);
+    }
 }
 
 void miniShell::execCommand(const Command& command)

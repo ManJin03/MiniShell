@@ -11,6 +11,8 @@ namespace miniShell
     std::string pwd(bool print);
 
     int cd(const Command& command);
+
+    void echo(const Command& command);
 } // miniShell
 
 #endif //MINISHELL_BUILDIN_H
