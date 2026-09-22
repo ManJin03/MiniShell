@@ -6,18 +6,12 @@
 #include "buildin.h"
 #include "Shell.h"
 #include <csignal>
-#include <sstream>
 #include <cstring>
 #include <sys/wait.h>
 #include <fcntl.h>
-#include <unordered_map>
 
 namespace miniShell
 {
-    std::unordered_map<string,string> env;
-
-    std::string path{};
-
     //提示符默认值，变量被 unexport 后回退到该值
     const string defaultPrompt{"$miniShell> "};
 
@@ -79,12 +73,14 @@ namespace miniShell
 
     //运行重定向指令
     static void redirectCommand(const Redirections& redirections);
+
+    static int historyCommand(const Command& command);
 } // miniShell
 
 const miniShell::string& miniShell::prompt()
 {
-    if (env.contains("prompt")) { return env.at("prompt"); }
-    return defaultPrompt; //避免 env["prompt"] 在变量缺失时插入空值
+    if (n_env.contains("prompt")) { return n_env.at("prompt"); }
+    return defaultPrompt;
 }
 
 miniShell::Shell::Shell()
@@ -97,15 +93,15 @@ miniShell::Shell::Shell()
     signal(SIGTTOU , SIG_IGN);
     signal(SIGTTIN , SIG_IGN);
     signal(SIGTSTP , SIG_IGN);
-    path = pwd(false);
-    env["prompt"] = defaultPrompt;
+    n_path = pwd(false);
+    n_env["prompt"] = defaultPrompt;
 }
 
 void miniShell::Shell::run()
 {
     while (true) {
-        path = pwd(false);
-        cout << path << prompt();
+        n_path = pwd(false);
+        cout << n_path << prompt();
         Input line{getLine()};
         if (line.empty()) { continue; }
         Tokens tokens{tokenize(line)};
@@ -131,6 +127,18 @@ miniShell::Input miniShell::getLine()
         }
         return {};
     }
+    if (line == "!!") {
+        if (n_history.empty()) {
+            cout << "bash: syntax error, no command before\n";
+            return {};
+        }
+        auto n = n_history.size() - 1;
+        while (n_history[n] == "!!") { --n; }
+        line = n_history[n];
+        cout << prompt() << line << "\n";
+        n_history.emplace_back("!!");
+    }
+    else { n_history.push_back(line); }
     return line;
 }
 
@@ -161,7 +169,7 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
                         cout << "bash: syntax error, no command after op <\n";
                         return {};
                     }
-                    tokens.push_back({"<"});
+                    tokens.emplace_back("<");
                     break;
                 }
                 case';': {
@@ -170,7 +178,7 @@ miniShell::Tokens miniShell::tokenize(const Input& line)
                         cout << "bash: syntax error, no command after op <\n";
                         return {};
                     }
-                    tokens.push_back({";"});
+                    tokens.emplace_back(";");
                     break;
                 }
                 case'>': {
@@ -358,8 +366,8 @@ miniShell::Node_ptr miniShell::parser(Tokens& tokens)
 {
     for (auto& token : tokens) {
         if (!token.empty() && token[0] == '$') {
-            if (string key{token.substr(1)} ; env.contains(key)) {
-                token = env.at(key);
+            if (string key{token.substr(1)} ; n_env.contains(key)) {
+                token = n_env.at(key);
             }
         }
     }
@@ -411,7 +419,9 @@ int miniShell::singleCommand(const Command& command)
         command.argv[0] == "echo" ||
         command.argv[0] == "export" ||
         command.argv[0] == "unexport" ||
-        command.argv[0] == "env") {
+        command.argv[0] == "env" ||
+        command.argv[0] == "history" ||
+        command.argv[0] == "!") {
         return shellFork(command);
     }
     return execFork(command);
@@ -509,7 +519,7 @@ int miniShell::shellFork(const Command& command)
     }
     if (command.argv[0] == "cd") {
         const int st{cd(command)};
-        path = pwd(false);
+        n_path = pwd(false);
         return st; //cd 需在父进程中执行才能改变 shell 的工作目录
     }
     if (command.argv[0] == "export") {
@@ -517,7 +527,7 @@ int miniShell::shellFork(const Command& command)
             std::cerr << "export: usage: export <name> <value>\n";
             return -1;
         }
-        env[command.argv[1]] = command.argv[2];
+        n_env[command.argv[1]] = command.argv[2];
         return 0;
     }
     if (command.argv[0] == "unexport") {
@@ -525,15 +535,15 @@ int miniShell::shellFork(const Command& command)
             std::cerr << "unexport: usage: unexport <name>\n";
             return -1;
         }
-        if (env.contains(command.argv[1])) {
-            env.erase(env.find(command.argv[1]));
+        if (n_env.contains(command.argv[1])) {
+            n_env.erase(n_env.find(command.argv[1]));
             return 0;
         }
         std::cerr << "unexport: " << command.argv[1] << ": not defined\n";
         return -1;
     }
     if (command.argv[0] == "env") {
-        for (const auto& i : env) {
+        for (const auto& i : n_env) {
             cout << i.first << ":" << i.second << '\n';
         }
         return 0;
@@ -616,6 +626,17 @@ void miniShell::shellCommand(const Command& command)
     else if (command.argv[0] == "echo") {
         echo(command);
     }
+    else if (command.argv[0] == "history") {
+        history();
+    }
+    else if (command.argv[0] == "!") {
+        if (command.argv.size() < 2) {
+            std::cerr << "echo: usage: ! <name>\n";
+        }
+        else {
+            historyCommand(command);
+        }
+    }
 }
 
 void miniShell::execCommand(const Command& command)
@@ -669,4 +690,19 @@ void miniShell::redirectCommand(const Redirections& redirections)
             }
         }
     }
+}
+
+int miniShell::historyCommand(const Command& command)
+{
+    const unsigned int n = std::stoi(command.argv[1]);
+    if (n > n_history.size()) {
+        std::cerr << "history size error\n";
+        return -1;
+    }
+    const Input& line = n_history[n];
+    Tokens tokens{tokenize(line)};
+    if (tokens.empty()) { return 0; }
+    const Node_ptr root{parser(tokens)};
+    if (root) { executeAST(root.get()); }
+    return 0;
 }

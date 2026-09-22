@@ -3,6 +3,7 @@
 //
 
 #include "buildin.h"
+#include <algorithm>
 #include <iostream>
 #include <pwd.h>
 #include <unistd.h>
@@ -48,4 +49,9 @@ void miniShell::echo(const Command& command)
         if (it != argv.end() - 1) cout << " ";
     }
     cout << '\n';
+}
+
+void miniShell::history()
+{
+    std::ranges::for_each(n_history , [] (const std::string_view s) { std::cout << s << '\n'; });
 }

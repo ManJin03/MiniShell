@@ -6,6 +6,7 @@
 #define MINISHELL_DATABASE_H
 #include <iostream>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace miniShell
@@ -58,5 +59,9 @@ namespace miniShell
     };
 
     using Node_ptr = std::unique_ptr<ASTNode>;
+
+    inline std::unordered_map<string,string> n_env;
+    inline std::vector<Input> n_history;
+    inline std::string n_path{};
 }
 #endif //MINISHELL_DATABASE_H

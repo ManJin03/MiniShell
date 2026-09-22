@@ -22,6 +22,7 @@
 - 处理 `SIGINT`（Ctrl-C）中断，屏蔽 shell 自身的 `SIGTTOU`、`SIGTTIN`、`SIGTSTP`。
 - 输入支持单引号或双引号包裹的、带空格的参数。
 - 管道和重定向运算符不必与其他内容用空格分开，例如使用 `cat<input.txt`。
+- 支持输入指令历史保存功能，使用`!!`执行上次命令，`history`显示命令历史，`! [0-..]` 来执行历史中的第n个命令
 
 ## 构建与运行
 
@@ -52,7 +53,7 @@ g++ -std=c++20 -Wall -Wextra -pedantic main.cpp Shell.cpp buildin.cpp -o minishe
 
 ## 使用示例
 
-```text
+```bash
 ls
 cat input.txt
 cat < input.txt
@@ -71,6 +72,9 @@ unexport greeting
 export prompt ">>> "
 export cmd pwd
 $cmd
+!!
+history
+! 3
 ```
 
 `&&` 仅在左侧命令退出码为 `0` 时执行右侧命令，`||` 仅在左侧退出码非 `0` 时执行右侧命令，二者优先级相同且左结合，高于 `;`、低于
@@ -123,6 +127,7 @@ echo hello > first.txt > second.txt
 | 完善单引号和双引号参数解析。                    | 已实现 |
 | 实现 `&&`、`\|\|` 和 `;` 的执行顺序及短路逻辑。 | 已实现 |
 | 增加环境变量与相关展开能力。                    | 已实现 |
+| 记录历史命令并显示执行                          | 已实现 |
 
 ## 许可证
 

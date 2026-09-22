@@ -13,6 +13,8 @@ namespace miniShell
     int cd(const Command& command);
 
     void echo(const Command& command);
+
+    void history();
 } // miniShell
 
 #endif //MINISHELL_BUILDIN_H
