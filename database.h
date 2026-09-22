@@ -51,6 +51,7 @@ namespace miniShell
             And ,
             Or ,
             Sequence ,
+            Parallel ,
         };
 
         Op op{};
@@ -63,5 +64,6 @@ namespace miniShell
     inline std::unordered_map<string,string> n_env;
     inline std::vector<Input> n_history;
     inline std::string n_path{};
+    inline bool g_batch{false}; //true 表示以 batch 模式运行，不打印提示符
 }
 #endif //MINISHELL_DATABASE_H

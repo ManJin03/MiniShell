@@ -74,6 +74,15 @@ namespace miniShell
     //运行重定向指令
     static void redirectCommand(const Redirections& redirections);
 
+    //去掉行尾空白与多余的分隔符，使 `cmd &` 这类写法可用
+    static void stripTrailingSeparators(Input& line);
+
+    //在子进程中执行一棵子树，返回子进程 pid
+    static int runSubtree(const ASTNode* node);
+
+    //并行执行各个子节点，最后统一回收
+    static int parallelExecute(const ASTNode* node);
+
     static int historyCommand(const Command& command);
 } // miniShell
 
@@ -101,8 +110,10 @@ void miniShell::Shell::run()
 {
     while (true) {
         n_path = pwd(false);
-        cout << n_path << prompt();
+        if (!g_batch) { cout << n_path << prompt(); } //batch 模式不打印提示符
         Input line{getLine()};
+        if (line.empty()) { continue; }
+        stripTrailingSeparators(line);
         if (line.empty()) { continue; }
         Tokens tokens{tokenize(line)};
         if (tokens.empty()) { continue; }
@@ -122,7 +133,7 @@ miniShell::Input miniShell::getLine()
             return {};
         }
         if (cin.eof()) {
-            cout << "\n";
+            if (!g_batch) { cout << "\n"; } //batch 模式下多余的换行会污染输出
             exit(EXIT_SUCCESS);
         }
         return {};
@@ -348,18 +359,37 @@ miniShell::Node_ptr miniShell::parseAndOr(const Tokens& tokens , size_t& pos)
 
 miniShell::Node_ptr miniShell::parseSequence(const Tokens& tokens , size_t& pos)
 {
-    Node_ptr first{parseAndOr(tokens , pos)};
+    vector<Node_ptr> items{};
+    vector<Token> separators{}; //separators[i - 1] 是 items[i] 前的分隔符
+    items.push_back(parseAndOr(tokens , pos));
     while (pos < tokens.size() && (tokens[pos] == ";" || tokens[pos] == "&")) {
+        separators.push_back(tokens[pos]);
         ++pos;
-        Node_ptr next{parseAndOr(tokens , pos)};
-        if (first->op != ASTNode::Op::Sequence) {
-            auto sequence{std::make_unique<ASTNode>(ASTNode{.op = ASTNode::Op::Sequence})};
-            sequence->children.push_back(std::move(first));
-            first = std::move(sequence);
+        if (pos >= tokens.size()) { break; } //行尾多余的分隔符
+        items.push_back(parseAndOr(tokens , pos));
+    }
+    if (items.size() == 1) { return std::move(items[0]); }
+    vector<Node_ptr> groups{}; //把连续的 & 折叠成一个并行节点
+    Node_ptr current{std::move(items[0])};
+    for (size_t i = 1 ; i < items.size() ; ++i) {
+        if (separators[i - 1] == "&") {
+            if (current->op != ASTNode::Op::Parallel) {
+                auto parallel{std::make_unique<ASTNode>(ASTNode{.op = ASTNode::Op::Parallel})};
+                parallel->children.push_back(std::move(current));
+                current = std::move(parallel);
+            }
+            current->children.push_back(std::move(items[i]));
         }
-        first->children.push_back(std::move(next));
-    } //展开为序列节点
-    return first;
+        else {
+            groups.push_back(std::move(current));
+            current = std::move(items[i]);
+        }
+    }
+    groups.push_back(std::move(current));
+    if (groups.size() == 1) { return std::move(groups[0]); }
+    auto sequence{std::make_unique<ASTNode>(ASTNode{.op = ASTNode::Op::Sequence})};
+    for (auto& it : groups) { sequence->children.push_back(std::move(it)); }
+    return sequence; //先并行分组，再按 ; 串成序列
 }
 
 miniShell::Node_ptr miniShell::parser(Tokens& tokens)
@@ -403,6 +433,8 @@ int miniShell::executeAST(const ASTNode* node)
             }
             return status;
         }
+        case ASTNode::Op::Parallel:
+            return parallelExecute(node); //并行命令全部回收后才返回
         default:
             return 0;
     }
@@ -690,6 +722,60 @@ void miniShell::redirectCommand(const Redirections& redirections)
             }
         }
     }
+}
+
+void miniShell::stripTrailingSeparators(Input& line)
+{
+    while (!line.empty() && isspace(static_cast<unsigned char>(line.back()))) {
+        line.pop_back();
+    }
+    while (!line.empty() && (line.back() == '&' || line.back() == ';')) {
+        line.pop_back();
+    } //行尾多余的分隔符，例如 `cmd1 & cmd2 &`
+    while (!line.empty() && isspace(static_cast<unsigned char>(line.back()))) {
+        line.pop_back();
+    }
+}
+
+int miniShell::runSubtree(const ASTNode* node)
+{
+    const pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork error");
+        return -1;
+    }
+    if (pid == 0) {
+        setpgid(0 , getpgrp()); //留在 shell 所在进程组，避免后台访问终端时被停止
+        signal(SIGINT , SIG_DFL);
+        const int status{executeAST(node)};
+        cout.flush(); //_exit 不会刷新缓冲区
+        _exit(status < 0 ? EXIT_FAILURE : status);
+    }
+    setpgid(pid , getpgrp());
+    return pid;
+}
+
+int miniShell::parallelExecute(const ASTNode* node)
+{
+    vector<pid_t> pids{};
+    for (auto& it : node->children) {
+        if (const int pid{runSubtree(it.get())} ; pid > 0) {
+            pids.emplace_back(pid);
+        }
+    } //先全部启动，再统一回收
+    int status{};
+    for (auto pid : pids) {
+        while (waitpid(pid , &status , 0) == -1) {
+            if (errno != EINTR) {
+                perror("waitpid error");
+                break;
+            }
+        }
+    }
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+        write(STDOUT_FILENO , "\n" , 1);
+    }
+    return 0; //并行作业不参与 && || 的短路判断
 }
 
 int miniShell::historyCommand(const Command& command)
